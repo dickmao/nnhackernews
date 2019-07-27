@@ -1,0 +1,62 @@
+sudo: false
+language: python
+
+addons:
+  apt:
+    packages:
+    - gnutls-bin
+    - sharutils
+
+cache:
+  directories:
+  - $HOME/local
+  - $HOME/.cask
+  - $HOME/.cache/pip
+  - $HOME/.evm
+  - $HOME/.emacs.d
+  - $HOME/Library/Caches/Homebrew
+  - $HOME/.pyenv
+  - $HOME/Library/Caches/pip
+
+env:
+  global:
+    - PATH=$HOME/local/bin:$HOME/local/evm/bin:$HOME/local/cask/bin:$PATH
+
+matrix:
+  allow_failures:
+    - env: EVM_EMACS=emacs-git-snapshot-travis
+  include:
+    - os: linux
+      env: EVM_EMACS=emacs-25.1-travis
+    - os: linux
+      env: EVM_EMACS=emacs-26.2-travis
+    - os: linux
+      env: EVM_EMACS=emacs-git-snapshot-travis
+    - os: osx
+      language: generic
+      env: EVM_EMACS=emacs-25.2 TOXENV=py27
+
+install:
+  - cp -pr $HOME/.cask .
+  - sh tools/install-virtualenv.sh
+  - |
+    if [ "x$TRAVIS_OS_NAME" = "xosx" ]; then
+      eval "$(pyenv init -)"
+      pyenv activate $TOXENV
+    fi
+
+before_script:
+  - sh tools/install-evm.sh
+  - |
+    if [ "x$TRAVIS_OS_NAME" = "xosx" ]; then
+      evm config path $HOME/.evm
+    else
+      evm config path /tmp
+    fi
+  - evm install $EVM_EMACS --use --skip
+  - emacs --version
+  - sh tools/install-cask.sh
+
+script:
+  - make test-install
+  - make test || ( ( printf "To diagnose, travis logs -i | dos2unix | sed '/^begin 644/,/^end/!d' | uudecode\n" ) && ( zip -q - tests/log/* 2>/dev/null | uuencode log.zip ) && false)

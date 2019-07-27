@@ -1,17 +1,15 @@
-==============
 |build-status|
-==============
 
-A Gnus backend for Reddit.
+A Gnus backend for Hacker News.
 
 .. |build-status|
-   image:: https://travis-ci.org/dickmao/nnreddit.svg?branch=master
-   :target: https://travis-ci.org/dickmao/nnreddit
+   image:: https://travis-ci.org/dickmao/nnhackernews.svg?branch=master
+   :target: https://travis-ci.org/dickmao/nnhackernews
    :alt: Build Status
 .. |melpa-dev|
-   image:: http://melpa.milkbox.net/packages/ein-badge.svg
-   :target: http://melpa.milkbox.net/#/ein
-   :alt: MELPA development version
+   image:: https://melpa.org/packages/nnhackernews-badge.svg
+   :target: http://melpa.org/#/nnhackernews
+   :alt: MELPA current version
 .. |melpa-stable|
    image:: http://melpa-stable.milkbox.net/packages/ein-badge.svg
    :target: http://melpa-stable.milkbox.net/#/ein
@@ -28,9 +26,9 @@ Then
 ::
 
    M-x package-refresh-contents RET
-   M-x package-install RET nnreddit RET
+   M-x package-install RET nnhackernews RET
 
-Alternatively, directly clone this repo and ``make install``.
+Alternatively, copy ``nnhackernews.el`` to a directory among ``C-h v RET load-path`` and add ``(require 'nnhackernews)`` to ``.emacs``.
 
 Usage
 =====
@@ -39,18 +37,9 @@ In your ``.gnus`` or ``.emacs``,
 ::
 
    (add-to-list 'gnus-secondary-select-methods
-                '(nnreddit ""))
+                '(nnhackernews ""))
 
-A typical session might look like::
-
-   M-x gnus
-   R g emacsy
-   q
-   u
-
-Keybinding ``u`` (gnus-group-unsubscribe-current-group) actually *toggles* subscription to ``r/emacsy``.  I don't make the rules.
-
-Reenter the ``emacsy`` newsgroup with ``RET``.  Rapidly catch yourself up via ``N`` and ``P``.  Instantly catch-up with ``c``.
+Enter the ``nnhackernews:news`` newsgroup with ``RET``.  Rapidly catch yourself up via ``N`` and ``P``.  Instantly catch-up with ``c``.
 
 Create a post via ``a``.
 
@@ -68,5 +57,4 @@ From the summary buffer, ``/o`` redisplays articles already read.  ``x`` undispl
 
 Gnus beginners may find the interface bewildering.  In particular, subreddits with no unread articles do not display.  Use ``L`` to bring them out of hiding.
 
-.. _Cask: https://cask.readthedocs.io/en/latest/guide/installation.html
 .. _Getting started: http://melpa.org/#/getting-started

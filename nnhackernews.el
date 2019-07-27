@@ -1,4 +1,4 @@
-;;; nnhackernews.el --- Gnus backend for hackernews  -*- lexical-binding: t; coding: utf-8 -*-
+;;; nnhackernews.el --- Gnus backend for Hacker News  -*- lexical-binding: t; coding: utf-8 -*-
 
 ;; Copyright (C) 2019 The Authors of nnhackernews.el
 
@@ -6,7 +6,7 @@
 ;; Version: 0
 ;; Keywords: news
 ;; URL: https://github.com/dickmao/nnhackernews
-;; Package-Requires: ((emacs "25"))
+;; Package-Requires: ((emacs "25") (request "20190726"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -25,7 +25,7 @@
 
 ;;; Commentary:
 
-;; A Gnus backend for Hackernews.
+;; A Gnus backend for Hacker News.
 
 ;;; Code:
 
@@ -39,11 +39,9 @@
 (require 'gnus-srvr)
 (require 'gnus-cache)
 (require 'gnus-bcklg)
-(require 'python)
-(require 'json-rpc)
 (require 'mm-url)
 (require 'cl-lib)
-(require 'virtualenvwrapper)
+(require 'json)
 
 (nnoo-declare nnhackernews)
 
@@ -65,82 +63,20 @@ Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtab
        'puthash)
     ,string ,value ,hashtable))
 
-(defcustom nnhackernews-python-command (if (equal system-type 'windows-nt)
-                                       (or (executable-find "py")
-                                           (executable-find "pythonw")
-                                           "python")
-                                     "python")
-  "Python executable name."
-  :type (append '(choice)
-                (let (result)
-                  (dolist (py '("python" "python2" "python3" "pythonw" "py")
-                              result)
-                    (setq result (append result `((const :tag ,py ,py))))))
-                '((string :tag "Other")))
-  :group 'nnhackernews)
+(defmacro nnhackernews--maphash (func table)
+  "Map FUNC over HASHTABLE, returns nil.
 
-(defcustom nnhackernews-venv
-  (let* ((library-directory (file-name-directory (locate-library "nnhackernews")))
-         (defacto-version (file-name-nondirectory
-                           (directory-file-name library-directory)))
-         (venv-id (concat defacto-version "-" nnhackernews-python-command))
-         (result (concat venv-location venv-id))
-         (requirements (concat library-directory "requirements.txt"))
-         (install-args (if (file-exists-p requirements)
-                           (list "-r" requirements)
-                         (list "virtualenv")))
-         (already-in-venv
-          (not (zerop (apply #'call-process nnhackernews-python-command
-                             nil nil nil
-                             (list
-                              "-c"
-                              "import sys; sys.exit(hasattr(sys, 'real_prefix'))")))))
-         (pip-args (append (list "-m" "pip" "install")
-                           (unless already-in-venv (list "--user"))
-                           install-args))
-         (pip-status
-          (apply #'call-process nnhackernews-python-command nil nil nil
-                 pip-args)))
-    (gnus-message 7 "nnhackernews-venv: %s %s" nnhackernews-python-command
-                  (mapconcat 'identity pip-args " "))
-    (cond ((numberp pip-status)
-           (unless (zerop pip-status)
-             (gnus-message 3 "nnhackernews-venv: pip install exit %s" pip-status)))
-          (t (gnus-message 3 "nnhackernews-venv: pip install signal %s" pip-status)))
-    (gnus-message 7 "nnhackernews-venv: %s" result)
-    (unless (file-exists-p venv-location)
-      (make-directory venv-location))
-    (cond ((member venv-id (split-string (venv-list-virtualenvs))) result)
-          (t (gnus-message 5 "nnhackernews-venv: installing venv to %s..." result)
-             (condition-case err
-                 (progn
-                   (venv-mkvirtualenv-using nnhackernews-python-command venv-id)
-                   (venv-with-virtualenv-shell-command
-                    venv-id
-                    ;; `python` and not `nnhackernews-python-command` because
-                    ;; venv normalizes the executable to `python`.
-                    (format "cd %s && python setup.py install" library-directory))
-                   (gnus-message 5 "nnhackernews-venv: installing venv to %s...done" result)
-                   result)
-               (error (when (venv-is-valid venv-id)
-                        (condition-case rmerr
-                            (venv-rmvirtualenv venv-id)
-                          (error (gnus-message 3 (format "venv-rmvirtualenv: %s"
-                                                         (error-message-string rmerr))))))
-                      (gnus-message 3 (format "nnhackernews-venv: %s"
-                                              (error-message-string err)))
-                      "/dev/null")))))
-  "Full path to venv directory.
-
-To facilitate upgrades, the name gloms a de facto version (the directory
-name where this file resides) and the `nnhackernews-python-command'."
-  :type '(choice (string :tag "Directory" (get (quote nnhackernews-env) (quote standard-value)))
-                 (const :tag "Development" nil))
-  :group 'nnhackernews)
+Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtables."
+  `(,(if (fboundp 'gnus-gethash-safe)
+         'mapatoms
+       'maphash)
+    ,(if (fboundp 'gnus-gethash-safe)
+         `(lambda (k) (funcall (apply-partially ,func (gnus-gethash-safe k ,table)) k))
+       func)
+    ,table))
 
 ;; keymaps made by `define-prefix-command' in `gnus-define-keys-1'
 (defvar nnhackernews-article-mode-map)
-(defvar nnhackernews-group-mode-map)
 
 ;; keymaps I make myself
 (defvar nnhackernews-summary-mode-map
@@ -150,16 +86,6 @@ name where this file resides) and the `nnhackernews-python-command'."
     (define-key map "F" 'gnus-summary-followup-with-original)
     map))
 
-(defcustom nnhackernews-log-rpc nil
-  "Turn on PRAW logging."
-  :type 'boolean
-  :group 'nnhackernews)
-
-(defcustom nnhackernews-rpc-request-timeout 60
-  "Turn on PRAW logging."
-  :type 'integer
-  :group 'nnhackernews)
-
 (defcustom nnhackernews-localhost "127.0.0.1"
   "Some users keep their browser in a separate domain.
 
@@ -167,16 +93,12 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
   :type 'string
   :group 'nnhackernews)
 
-(defvar nnhackernews-rpc-log-filename nil)
-
-(defvar nnhackernews--python-module-extra-args nil "Primarily for testing.")
-
 (define-minor-mode nnhackernews-article-mode
   "Minor mode for nnhackernews articles.  Disallow `gnus-article-reply-with-original'.
 
 \\{gnus-article-mode-map}
 "
-  :lighter " Hackernews"
+  :lighter " HN"
   :keymap gnus-article-mode-map
 
   (when nnhackernews-article-mode
@@ -191,18 +113,8 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
 
 \\{nnhackernews-summary-mode-map}
 "
-  :lighter " Hackernews"
+  :lighter " HN"
   :keymap nnhackernews-summary-mode-map)
-
-(define-minor-mode nnhackernews-group-mode
-  "Add `R-g' go-to-subhackernews binding to *Group*.
-
-\\{gnus-group-mode-map}
-"
-  :keymap gnus-group-mode-map
-  (when nnhackernews-group-mode
-    (gnus-define-keys (nnhackernews-group-mode-map "R" gnus-group-mode-map)
-      "g" nnhackernews-goto-group)))
 
 (defsubst nnhackernews-novote ()
   "Retract vote."
@@ -270,8 +182,11 @@ Normalize it to \"nnhackernews-default\"."
        ((= (length head) 1) `(if ,(car head) ,rest))
        (t `(let (,head) (if ,(car head) ,rest)))))))
 
+(defvar nnhackernews-location-hashtb (gnus-make-hashtable)
+  "id -> ( group . index )")
+
 (defvar nnhackernews-headers-hashtb (gnus-make-hashtable)
-  "Group (subhackernews) string -> interleaved submissions and comments sorted by created time.")
+  "group -> headers")
 
 (defvar nnhackernews-refs-hashtb (gnus-make-hashtable)
   "Who replied to whom (global over all entries).")
@@ -283,13 +198,34 @@ Normalize it to \"nnhackernews-default\"."
   "List headers from GROUP."
   (nnhackernews--gethash group nnhackernews-headers-hashtb))
 
-(defun nnhackernews-find-header (group id)
-  "O(n) search of GROUP headers for ID."
-  (nnhackernews-and-let* ((headers (nnhackernews-get-headers group))
-                      (found (seq-position headers id
-                                           (lambda (plst id)
-                                             (equal id (plist-get plst :id))))))
-                     (nnhackernews--get-header (1+ found) group)))
+(defun nnhackernews-find-header (id)
+  "Retrieve for property list of ID."
+  (if-let ((location (nnhackernews--gethash id nnhackernews-location-hashtb)))
+      (destructuring-bind (group index) location
+        (nnhackernews--get-header (1+ index) group))
+    (nnhackernews--request-item id)))
+
+(defun nnhackernews--group-for (plst)
+  "Classify PLST as one of ask, show, or news based on title."
+  (let ((title (or (plist-get plst :title) "")))
+    ;; string-match-p like all elisp searching is case-insensitive
+    (cond ((string-match-p "^Ask HN" title) nnhackernews--group-ask)
+          ((string-match-p "^Show HN" title) nnhackernews--group-show)
+          ((string= (plist-get plst :type) "job") nnhackernews--group-job)
+          (t nnhackernews--group-news))))
+
+(defsubst nnhackernews--who-am-i ()
+  "Get my Hacker News username."
+  (when-let ((user-cookie 
+              (cdr (assoc-string
+                    "user"
+                    (loop with result
+                          for securep in '(t nil)
+                          do (setq result
+                                   (request-cookie-alist "news.ycombinator.com" "/" securep))
+                          until result
+                          finally return result)))))
+    (first (split-string user-cookie "&"))))
 
 (defsubst nnhackernews-refs-for (name &optional depth)
   "Get message ancestry for NAME up to DEPTH."
@@ -304,38 +240,20 @@ Normalize it to \"nnhackernews-default\"."
                        collect name
                        until (>= (cl-incf level) depth)))))
 
-(defsubst nnhackernews-sort-append-headers (group &rest lvp)
-  "Append to hashed headers of GROUP the LVP (list of vector of plists)."
-  (nnhackernews--sethash group (append (nnhackernews-get-headers group)
-                              (apply #'nnhackernews--sort-headers lvp))
-                nnhackernews-headers-hashtb))
+(defsubst nnhackernews--append-header (plst &optional root-item)
+  "Update data structures for PLST \"header\".
 
-(defvar nnhackernews-directory (nnheader-concat gnus-directory "hackernews")
-  "Where to retrieve last read state.")
-
-(defvar nnhackernews-processes nil
-  "Garbage collect PRAW processes.")
+Refer to ROOT-ITEM for group classification if provided (otherwise use title of PLST)."
+  (let ((group (if root-item
+                   (nnhackernews--group-for (nnhackernews-find-header root-item))
+                 (nnhackernews--group-for plst))))
+    (nnhackernews--sethash (plist-get plst :id)
+                           (cons group (length (nnhackernews-get-headers group)))
+                           nnhackernews-location-hashtb)
+    (nnhackernews--sethash group (nconc (nnhackernews-get-headers group) (list plst))
+                           nnhackernews-headers-hashtb)))
 
 (nnoo-define-basics nnhackernews)
-
-(defsubst nnhackernews-rpc-call (server generator_kwargs method &rest args)
-  "Make jsonrpc call to SERVER with GENERATOR_KWARGS using METHOD ARGS.
-
-Process stays the same, but the jsonrpc connection (a cheap struct) gets reinstantiated with every call."
-  (nnhackernews--normalize-server)
-  (nnhackernews-and-let* ((proc (nnhackernews-rpc-get server))
-                      (connection (json-rpc--create :process proc
-                                                    :host nnhackernews-localhost
-                                                    :id-counter 0)))
-    (apply #'nnhackernews-rpc-request connection generator_kwargs method args)))
-
-(defun nnhackernews-goto-group (realname)
-  "Jump to the REALNAME subhackernews."
-  (interactive (list (read-no-blanks-input "Subhackernews: r/")))
-  (let* ((canonical (nnhackernews-rpc-call nil nil "canonical_spelling" realname))
-         (group (gnus-group-full-name canonical "nnhackernews")))
-    (gnus-activate-group group t)
-    (gnus-group-read-group t t group)))
 
 (defun nnhackernews-vote-current-article (vote)
   "VOTE is +1, -1, 0."
@@ -349,11 +267,10 @@ Process stays the same, but the jsonrpc connection (a cheap struct) gets reinsta
          (new-score (if (zerop vote) orig-score
                       (concat orig-score " "
                               (if (> vote 0) "+" "")
-                              (format "%s" vote))))
-         (article-name (plist-get header :name)))
+                              (format "%s" vote)))))
     (let ((inhibit-read-only t))
       (nnheader-replace-header "score" new-score))
-    (nnhackernews-rpc-call nil nil "vote" article-name vote)))
+    (nnhackernews--request-vote (plist-get header :id) vote)))
 
 (defsubst nnhackernews--gate (&optional group)
   "Apply our minor modes only when the following conditions hold for GROUP."
@@ -362,28 +279,6 @@ Process stays the same, but the jsonrpc connection (a cheap struct) gets reinsta
   (and (stringp group)
        (listp (gnus-group-method group))
        (eq 'nnhackernews (car (gnus-group-method group)))))
-
-(defun nnhackernews-update-subscription (group level oldlevel &optional _previous)
-  "Nnhackernews `gnus-group-change-level' callback of GROUP to LEVEL from OLDLEVEL."
-  (when (nnhackernews--gate group)
-    (let ((old-subbed-p (<= oldlevel gnus-level-default-subscribed))
-          (new-subbed-p (<= level gnus-level-default-subscribed)))
-      (unless (eq old-subbed-p new-subbed-p)
-        ;; afaict, praw post() doesn't return status
-        (if new-subbed-p
-            (nnhackernews-rpc-call nil nil "subscribe" (gnus-group-real-name group))
-          (nnhackernews-rpc-call nil nil "unsubscribe" (gnus-group-real-name group)))))))
-
-(defun nnhackernews-rpc-kill (&optional server)
-  "Kill the jsonrpc process named SERVER."
-  (interactive (list nil))
-  (nnhackernews--normalize-server)
-  (let (new-processes)
-    (mapc (lambda (proc) (if (and server (not (string= server (process-name proc))))
-                             (push proc new-processes)
-                           (delete-process proc)))
-          nnhackernews-processes)
-    (setq nnhackernews-processes new-processes)))
 
 (deffoo nnhackernews-request-close ()
   (nnhackernews-close-server)
@@ -422,18 +317,17 @@ Process stays the same, but the jsonrpc connection (a cheap struct) gets reinsta
     (let ((headers (nnhackernews-get-headers group)))
       (elt headers (1- article-number)))))
 
-(defun nnhackernews--get-body (name &optional group server)
-  "Get full text of submission or comment NAME for GROUP at SERVER."
+(defun nnhackernews--get-body (id &optional server)
+  "Get full text of submission or comment ID at SERVER."
   (nnhackernews--normalize-server)
-  (nnhackernews--with-group group
-    (nnhackernews-rpc-call server nil "body" group name)))
+  (plist-get (nnhackernews-find-header id) :text))
 
 (defsubst nnhackernews-hack-name-to-id (name)
   "Get x from t1_x (NAME)."
   (cl-subseq name 3))
 
 (defsubst nnhackernews--br-tagify (body)
-  "Hackernews-html BODY shies away from <BR>.  Should it?"
+  "Hackernews html BODY shies away from <BR>.  Should it?"
   (replace-regexp-in-string "\n" "<br>" body))
 
 (defsubst nnhackernews--citation-wrap (author body)
@@ -454,22 +348,7 @@ Originally written by Paul Issartel."
 
 (defun nnhackernews-add-entry (hashtb e field)
   "Add to HASHTB the pair consisting of entry E's name to its FIELD."
-  (nnhackernews--sethash (plist-get e :name) (plist-get e field) hashtb))
-
-(defun nnhackernews--filter-after (after-this vop)
-  "Get elements created AFTER-THIS in VOP (vector of plists)."
-  (cl-loop for elt-idx in (funcall nnhackernews--seq-map-indexed
-                                   (lambda (elt idx) (cons elt idx)) vop)
-           until (>= (plist-get (car elt-idx) :created_utc) after-this)
-           finally return (seq-drop vop (or (cdr elt-idx) 0))))
-
-(defsubst nnhackernews--base10 (base36)
-  "Convert BASE36 hackernews name encoding to a base10 integer."
-  (apply #'+ (funcall nnhackernews--seq-map-indexed
-                      (lambda (elt idx)
-                        (* (expt 36 idx)
-                           (if (>= elt ?a) (+ 10 (- elt ?a)) (- elt ?0))))
-                      (reverse base36))))
+  (nnhackernews--sethash (plist-get e :id) (plist-get e field) hashtb))
 
 (deffoo nnhackernews-request-group-scan (group &optional server _info)
   "M-g from *Group* calls this.
@@ -581,28 +460,133 @@ Set flag for the ensuing `nnhackernews-request-group' to avoid going out to PRAW
             (gnus-message 7 "nnhackernews-request-group: new info=%s" info)))))
     t))
 
+(defconst nnhackernews--cache-seconds 9 "Avoid refetching for these many seconds.")
+
+(defsubst nnhackernews--json-read ()
+  "Copied from ein:json-read() by tkf."
+  (goto-char (point-max))
+  (backward-sexp)
+  (let ((json-object-type 'plist)
+        (json-array-type 'list))
+    (json-read)))
+
+(defun nnhackernews--request-max-item ()
+  "Retrieve the max-item from which all read-unread accounting stems."
+  (let (max-item)
+    (nnhackernews--request "https://hacker-news.firebaseio.com/v0/maxitem.json"
+                           :parser 'nnhackernews--json-read
+                           :success (cl-function (lambda (&key data &allow-other-keys)
+                                                   (setq max-item data))))
+    max-item))
+
+(cl-defun nnhackernews--request (caller url &rest attributes &key parser &allow-other-keys)
+  "Prefix errors with CALLER when executing synchronous request to URL.
+
+On success, execute forms of SUCCESS."
+  (unless parser
+    (setq attributes (nconc attributes (list :parser #'buffer-string))))
+  (apply #'request url
+         :sync t
+         :error (cl-function
+                   (lambda (&key response error-thrown &allow-other-keys
+                            &aux (response-status
+                                  (request-response-status-code response)))
+                     (gnus-message 2 "%s %s: HTTP %s (%s)" caller
+                                   id response-status
+                                   (subst-char-in-string ?\n ?\ 
+                                      (error-message-string error-thrown)))))
+         attributes))
+
+(defun nnhackernews--request-vote (id vote)
+  "Tally VOTE for ID.
+
+curl -sLk --cookie /home/dick/.emacs.d/request/curl-cookie-jar --cookie-jar /home/dick/.emacs.d/request/curl-cookie-jar https://news.ycombinator.com/item?id=20531382
+
+to get the auth.
+
+Then auth it."
+  (nnhackernews--request
+   "nnhackernews--request-vote"
+   (format "https://news.ycombinator.com/item/id=%s" id)
+   :success (cl-function
+             (lambda (&key data &allow-other-keys)
+               (when (string-match "\\(href='[^']+'\\)" data)
+                 (nnhackernews--request "nnhackernews--request-vote"
+                                        (format "https://news.ycombinator.com/%s"
+                                                (match-string 1 data))))))))
+
+(nnhackernews--request-reply (plist-get header :id)
+                                                body (stringp root-p))
+
+(defun nnhackernews--request-reply (id body _root-p)
+  "Reply to ID with BODY."
+)
+
+(defun nnhackernews--request-edit (id body)
+  "Replace body of ID with BODY."
+)
+
+(defun nnhackernews--request-delete (id)
+  "Cancel ID."
+)
+
+(defun nnhackernews--request-submit-link (title link)
+  "Submit TITLE with LINK."
+)
+
+(defun nnhackernews--request-submit-text (title text)
+  "Submit TITLE with TEXT."
+)
+
+(defun nnhackernews--request-item (id)
+  "Retrieve ID as a property list."
+  (let (plst)
+    (nnhackernews--request
+     "nnhackernews--request-item"
+     (format "https://hacker-news.firebaseio.com/v0/item/%s.json" id)
+     :parser 'nnhackernews--json-read
+     :success (cl-function
+               (lambda (&key data &allow-other-keys)
+                 (setq plst data))))
+    plst))
+
+(defun nnhackernews--incoming ()
+  "Keep a global cache of the latest stories from the last `nnhackernews--cache-seconds'."
+  (when-let ((max-item (nnhackernews--request-max-item)))
+    (cl-do ((item nnhackernews--max-item (1+ item))
+            (counts (gnus-make-hashtable)))
+        ((>= item max-item)
+         (setq nnhackernews--max-item max-item)
+         (gnus-message
+          5 (concat "nnhackernews-request-scan: "
+                    (let ((result ""))
+                      (nnhackernews--maphash
+                       (lambda (key value)
+                         (setq result (concat result (format "%s +%s " value key))))
+                       counts)
+                      result))))
+      (nnhackernews-and-let* ((plst (nnhackernews--request-item item))
+                              (type (plist-get plst :type)))
+        (nnhackernews-add-entry nnhackernews-refs-hashtb plst :parent)
+        (nnhackernews-add-entry nnhackernews-authors-hashtb plst :by)
+        (nnhackernews--sethash type
+                               (1+ (or (nnhackernews--gethash type counts) 0))
+                               counts)
+        (cl-case (intern type)
+          ((story job) (nnhackernews--append-header plst))
+          ((comment) (let ((root-item (car (nnhackernews-refs-for plst))))
+                       (nnhackernews--append-header plst root-item)))
+          (otherwise (gnus-message 5 "nnhackernews-incoming: ignoring type %s" type)))))))
+
 (deffoo nnhackernews-request-scan (&optional group server)
   (nnhackernews--normalize-server)
   (unless (null group)
     (nnhackernews--with-group group
-      (let* ((comments (nnhackernews-rpc-call server nil "comments" group))
-             (raw-submissions (nnhackernews-rpc-call server nil "submissions" group))
-             (submissions (if (zerop (length comments))
-                              raw-submissions
-                            (nnhackernews--filter-after
-                             (- (plist-get (aref comments 0) :created_utc) 7200)
-                             raw-submissions))))
-        (seq-doseq (e comments)
-          (nnhackernews-add-entry nnhackernews-refs-hashtb e :parent_id)) ;; :parent_id is fullname
-        (seq-doseq (e (vconcat submissions comments))
-          (nnhackernews-add-entry nnhackernews-authors-hashtb e :author))
-        (gnus-message 5 "nnhackernews-request-scan: %s: +%s comments +%s submissions"
-                      group (length comments) (length submissions))
-        (nnhackernews-sort-append-headers group submissions comments)))))
+      (nnhackernews--incoming))))
 
 (defsubst nnhackernews--make-message-id (fullname)
   "Construct a valid Gnus message id from FULLNAME."
-  (format "<%s@hackernews.com>" fullname))
+  (format "<%s@ycombinator.com>" fullname))
 
 (defsubst nnhackernews--make-references (fullname)
   "Construct a space delimited string of message ancestors of FULLNAME."
@@ -620,10 +604,10 @@ Set flag for the ensuing `nnhackernews-request-group' to avoid going out to PRAW
          (concat "Re: " (plist-get header :link_title)))
      (plist-get header :author)
      (format-time-string "%a, %d %h %Y %T %z (%Z)" (plist-get header :created_utc))
-     (nnhackernews--make-message-id (plist-get header :name))
-     (nnhackernews--make-references (plist-get header :name))
+     (nnhackernews--make-message-id (plist-get header :id))
+     (nnhackernews--make-references (plist-get header :id))
      0 0 nil
-     (append `((X-Hackernews-Name . ,(plist-get header :name)))
+     (append `((X-Hackernews-Name . ,(plist-get header :id)))
              `((X-Hackernews-ID . ,(plist-get header :id)))
              (nnhackernews-aif (plist-get header :permalink)
                            `((X-Hackernews-Permalink . ,it)))
@@ -641,7 +625,7 @@ Set flag for the ensuing `nnhackernews-request-group' to avoid going out to PRAW
              (mail-header (nnhackernews--make-header article-number))
              (score (cdr (assq 'X-Hackernews-Score (mail-header-extra mail-header))))
              (permalink (cdr (assq 'X-Hackernews-Permalink (mail-header-extra mail-header))))
-             (body (nnhackernews--get-body (plist-get header :name) group server)))
+             (body (nnhackernews--get-body (plist-get header :id) group server)))
         (when body
           (insert
            "Newsgroups: " group "\n"
@@ -652,7 +636,7 @@ Set flag for the ensuing `nnhackernews-request-group' to avoid going out to PRAW
            "References: " (mail-header-references mail-header) "\n"
            "Content-Type: text/html; charset=utf-8" "\n"
            (if permalink
-               (format "Archived-at: <https://www.hackernews.com%s>\n" permalink)
+               (format "Archived-at: <https://news.ycombinator.com%s>\n" permalink)
              "")
            "Score: " score "\n"
            "\n")
@@ -674,83 +658,26 @@ Set flag for the ensuing `nnhackernews-request-group' to avoid going out to PRAW
         (nnheader-insert-nov (nnhackernews--make-header i group)))
       'nov)))
 
-(defsubst nnhackernews--earliest-among (indices lvp)
-  "Return (list-to-iterate . next-earliest) from INDICES (thus-far iterators)
-and LVP (list of vectors of plists).  Used in the interleaving of submissions and comments."
-  (let (earliest next-earliest)
-    (dolist (plst-idx
-             (cl-remove-if-not #'car
-                            (funcall nnhackernews--seq-map-indexed
-                                     (lambda (plst idx) (cons plst idx))
-                                     (seq-mapn
-                                      (lambda (v i)
-                                        (if (< i (length v)) (aref v i)))
-                                      lvp indices)))
-             (list (cdr earliest)
-                   (nnhackernews-aif next-earliest
-                       (plist-get (car it) :created_utc))))
-      (cond ((null earliest)
-             (setq earliest plst-idx))
-            ((< (plist-get (car plst-idx) :created_utc)
-                (plist-get (car earliest) :created_utc))
-             (setq next-earliest earliest)
-             (setq earliest plst-idx))
-            ((null next-earliest)
-             (setq next-earliest plst-idx))))))
-
-(defun nnhackernews--sort-headers (&rest lvp)
-  "Sort headers for LVP (list of vectors of plists)."
-  (let* ((indices (make-list (length lvp) 0))
-         result)
-    (while (not (equal indices (mapcar #'length lvp)))
-      (cl-destructuring-bind (to-iterate bogey-created)
-          (nnhackernews--earliest-among indices lvp)
-        (cl-loop with arr = (elt lvp to-iterate)
-                 for j in (number-sequence (elt indices to-iterate) (1- (length arr)))
-                 for plst = (aref arr j)
-                 for created = (plist-get plst :created_utc)
-                 until (> created (or bogey-created most-positive-fixnum))
-                 do (cl-incf (elt indices to-iterate))
-                 do (push plst result))))
-    (nreverse result)))
-
 (deffoo nnhackernews-close-server (&optional server)
   (nnhackernews--normalize-server)
-  (condition-case err
-      (progn (nnhackernews-rpc-kill server) t)
-    (error
-     (gnus-message 2 "nnhackernews-close-server: %s" (error-message-string err))
-     nil)))
+  t)
+
+(defconst nnhackernews--group-ask "ask")
+(defconst nnhackernews--group-show "show")
+(defconst nnhackernews--group-job "job")
+(defconst nnhackernews--group-news "news")
 
 (deffoo nnhackernews-request-list (&optional server)
   (nnhackernews--normalize-server)
   (with-current-buffer nntp-server-buffer
-    (let ((groups (nnhackernews-rpc-call server nil "user_subhackernewss"))
-          (newsrc (cl-mapcan (lambda (info)
-                               (when (and (equal "nnhackernews:" (gnus-info-method info))
-                                          (<= (gnus-info-level info)
-                                              gnus-level-default-subscribed))
-                                 (list (gnus-info-group info))))
-                             gnus-newsrc-alist)))
-      (mapc (lambda (realname)
-              (let ((group (gnus-group-full-name realname '("nnhackernews" (or server "")))))
-                (erase-buffer)
-                (gnus-message 5 "nnhackernews-request-list: scanning %s..." realname)
-                (gnus-activate-group group t)
-                (gnus-message 5 "nnhackernews-request-list: scanning %s...done" realname)
-                (gnus-group-unsubscribe-group group gnus-level-default-subscribed t)
-                (setq newsrc (cl-remove group newsrc :test #'string=))))
-            groups)
-      (mapc (lambda (fullname)
-              (gnus-message 4 "nnhackernews-request-list: missing subscription %s" fullname)
-              (nnhackernews-rpc-call nil nil "subscribe" (gnus-group-real-name fullname))
-              (gnus-activate-group fullname t))
-            newsrc)
-      (erase-buffer)
-      (mapc (lambda (group)
-              (insert (format "%s %d 1 y\n" group
-                              (length (nnhackernews-get-headers group)))))
-            groups)))
+    (erase-buffer)
+    (mapc (lambda (group)
+            (insert (format "%s %d 1 y\n" group
+                            (length (nnhackernews-get-headers group)))))
+          `(,nnhackernews--group-ask
+            ,nnhackernews--group-show
+            ,nnhackernews--group-job
+            ,nnhackernews--group-news)))
   t)
 
 (defun nnhackernews-sentinel (process event)
@@ -759,7 +686,7 @@ and LVP (list of vectors of plists).  Used in the interleaving of submissions an
     (gnus-message 2 "nnhackernews-sentinel: process %s %s"
                   (car (process-command process))
                   (replace-regexp-in-string "\n$" "" event))
-    (setq nnhackernews-headers-hashtb (gnus-make-hashtable))
+    (setq nnhackernews-location-hashtb (gnus-make-hashtable))
     (gnus-backlog-shutdown)))
 
 (defun nnhackernews--message-user (server beg end _prev-len)
@@ -768,99 +695,6 @@ and LVP (list of vectors of plists).  Used in the interleaving of submissions an
         (magic "::user::"))
     (when (string-prefix-p magic string)
       (message "%s: %s" server (substring string (length magic))))))
-
-(defsubst nnhackernews--install-failed ()
-  "If we can't install the virtualenv then all bets are off."
-  (string= nnhackernews-venv "/dev/null"))
-
-(defun nnhackernews-rpc-get (&optional server)
-  "Retrieve the PRAW process for SERVER."
-  (nnhackernews--normalize-server)
-  (unless (nnhackernews--install-failed)
-    (let ((proc (get-buffer-process (get-buffer-create (format " *%s*" server)))))
-      (unless proc
-        (let* ((nnhackernews-el-dir (directory-file-name (file-name-directory (locate-library "nnhackernews"))))
-               (nnhackernews-py-dir (directory-file-name
-                                 (if (string= "lisp" (file-name-base nnhackernews-el-dir))
-                                     (file-name-directory nnhackernews-el-dir)
-                                   nnhackernews-el-dir)))
-               (python-shell-extra-pythonpaths (list nnhackernews-py-dir))
-               (process-environment (python-shell-calculate-process-environment))
-               (python-executable (if nnhackernews-venv
-                                      (format "%s/bin/python" nnhackernews-venv)
-                                    (executable-find nnhackernews-python-command)))
-               (python-module (if (featurep 'nnhackernews-test) "tests" "nnhackernews"))
-               (praw-command (append (list python-executable "-m" python-module)
-                                     nnhackernews--python-module-extra-args)))
-          (unless (featurep 'nnhackernews-test)
-            (setq praw-command (append praw-command (list "--localhost" nnhackernews-localhost)))
-            (when nnhackernews-log-rpc
-              (setq nnhackernews-rpc-log-filename
-                    (concat (file-name-as-directory temporary-file-directory)
-                            "nnhackernews-rpc-log."))
-              (setq praw-command (append praw-command
-                                         (list "--log" nnhackernews-rpc-log-filename)))))
-          (setq proc (make-process :name server
-                                   :buffer (get-buffer-create (format " *%s*" server))
-                                   :command praw-command
-                                   :connection-type 'pipe
-                                   :noquery t
-                                   :sentinel #'nnhackernews-sentinel
-                                   :stderr (get-buffer-create (format " *%s-stderr*" server))))
-          (with-current-buffer (get-buffer-create (format " *%s-stderr*" server))
-            (add-hook 'after-change-functions
-                      (apply-partially 'nnhackernews--message-user server)
-                      nil t)))
-        (push proc nnhackernews-processes))
-      proc)))
-
-(defun nnhackernews-rpc-request (connection kwargs method &rest args)
-  "Send to CONNECTION a request with generator KWARGS calling METHOD ARGS.
-
-Library `json-rpc--request' assumes HTTP transport which jsonrpyc does not, so we make our own."
-  (unless (hash-table-p kwargs)
-    (setq kwargs #s(hash-table)))
-  (let* ((id (cl-incf (json-rpc-id-counter connection)))
-         (request `(:method ,method
-                    :id ,id
-                    :params (:args ,(apply json-array-type args) :kwargs ,kwargs)))
-         (proc (json-rpc-process (json-rpc-ensure connection)))
-         (encoded (json-encode (append '(:jsonrpc "2.0") request)))
-         (json-object-type 'plist)
-         (json-key-type 'keyword)
-         (iteration-seconds 6))
-    (with-current-buffer (process-buffer proc)
-      (erase-buffer)
-      (gnus-message 7 "nnhackernews-rpc-request: send %s" encoded)
-      (process-send-string proc (concat encoded "\n"))
-      (cl-loop repeat (/ nnhackernews-rpc-request-timeout iteration-seconds)
-               with result
-               until (or (not (json-rpc-live-p connection))
-                         (and (not (zerop (length (buffer-string))))
-                              (condition-case err
-                                  (setq result (json-read-from-string (buffer-string)))
-                                (error
-                                 (let* ((resp (if (< (length (buffer-string)) 100)
-                                                  (buffer-string)
-                                                (format "%s...%s"
-                                                        (cl-subseq (buffer-string) 0 50)
-                                                        (cl-subseq (buffer-string) -50)))))
-                                   (setq result
-                                         `(:error ,(format "%s on %s"
-                                                           (error-message-string err)
-                                                           resp))))
-                                 nil))))
-               do (accept-process-output proc iteration-seconds 0)
-               finally return
-               (cond ((null result)
-                      (error "nnhackernews-rpc-request: response timed out"))
-                     ((plist-get result :error)
-                      (error "nnhackernews-rpc-request: %s" (plist-get result :error)))
-                     (t
-                      (gnus-message 7 "nnhackernews-rpc-request: recv ...%s"
-                                    (cl-subseq (buffer-string)
-                                               (- (min (length (buffer-string)) 50))))
-                      (plist-get result :result)))))))
 
 (defsubst nnhackernews--extract-name (from)
   "String match on something looking like t1_es076hd in FROM."
@@ -875,7 +709,6 @@ Library `json-rpc--request' assumes HTTP transport which jsonrpyc does not, so w
 (deffoo nnhackernews-request-post (&optional server)
   (nnhackernews--normalize-server)
   (let* ((ret t)
-         (kwargs (make-hash-table))
          (title (or (message-fetch-field "Subject") (error "No Subject field")))
          (link (message-fetch-field "Link"))
          (reply-p (not (null message-reply-headers)))
@@ -894,22 +727,18 @@ Library `json-rpc--request' assumes HTTP transport which jsonrpyc does not, so w
               (message-goto-body)
               (narrow-to-region (point) (point-max))
               (buffer-string)))))
-    (cond (cancel-name (nnhackernews-rpc-call server nil "delete" cancel-name))
-          (edit-name (nnhackernews-rpc-call server nil "edit" edit-name body))
-          (reply-p (nnhackernews-rpc-call server nil "reply"
-                                      (plist-get header :name)
-                                      body (stringp root-p)))
+    (cond (cancel-name (nnhackernews--request-delete cancel-name))
+          (edit-name (nnhackernews--request-edit edit-name body))
+          (reply-p (nnhackernews--request-reply (plist-get header :id)
+                                                body (stringp root-p)))
           (link (let* ((parsed-url (url-generic-parse-url link))
                        (host (url-host parsed-url)))
                   (if (and (stringp host) (not (zerop (length host))))
-                      (progn
-                        (puthash 'url link kwargs)
-                        (nnhackernews-rpc-call server kwargs "submit" group title))
-                    ;; gnus-error might be better here
+                      (nnhackernews--request-submit-link title link)
                     (error "nnhackernews-request-post: invalid url \"%s\"" link)
                     (setq ret nil))))
-          (t (puthash 'selftext body kwargs)
-             (nnhackernews-rpc-call server kwargs "submit" group title)))
+          (t (puthash 'selftext body )
+             (nnhackernews--request-submit-text title body)))
     ret))
 
 (add-to-list 'gnus-parameters `("^nnhackernews"
@@ -938,14 +767,7 @@ Library `json-rpc--request' assumes HTTP transport which jsonrpyc does not, so w
   (when (nnhackernews--gate)
     (nnhackernews-summary-mode)))
 
-(defun nnhackernews-group-mode-activate ()
-  "Augment the `gnus-group-mode-map' unconditionally."
-  (setq gnus-group-change-level-function 'nnhackernews-update-subscription)
-  (nnhackernews-group-mode))
-
 ;; I believe I did try buffer-localizing hooks, and it wasn't sufficient
-(add-hook 'gnus-article-mode-hook 'nnhackernews-article-mode-activate)
-(add-hook 'gnus-group-mode-hook 'nnhackernews-group-mode-activate)
 (add-hook 'gnus-summary-mode-hook 'nnhackernews-summary-mode-activate)
 
 ;; `gnus-newsgroup-p' requires valid method post-mail to return t
@@ -959,7 +781,7 @@ Library `json-rpc--request' assumes HTTP transport which jsonrpyc does not, so w
                  (or (nnhackernews-and-let*
                       ((article-number (gnus-summary-article-number))
                        (header (nnhackernews--get-header article-number))
-                       (root-name (car (nnhackernews-refs-for (plist-get header :name))))
+                       (root-name (car (nnhackernews-refs-for (plist-get header :id))))
                        (rootless (or (not (stringp root-name))
                                      (not (string-prefix-p "t3_" root-name))
                                      (not (nnhackernews-find-header
@@ -1073,13 +895,13 @@ Library `json-rpc--request' assumes HTTP transport which jsonrpyc does not, so w
  (lambda (val)
    (if (and (nnhackernews--gate)
             (cl-search "--so-tickle-me" val))
-       "hackernews.com" val)))
+       "ycombinator.com" val)))
 
 (add-function
  :before-until (symbol-function 'message-make-from)
  (lambda (&rest _args)
    (when (nnhackernews--gate)
-     (concat (nnhackernews-rpc-call nil nil "user_attr" "name") "@hackernews.com"))))
+     (concat (nnhackernews--who-am-i) "@ycombinator.com"))))
 
 (add-function
  :around (symbol-function 'message-is-yours-p)
@@ -1087,7 +909,7 @@ Library `json-rpc--request' assumes HTTP transport which jsonrpyc does not, so w
    (let ((concat-func (lambda (f &rest args)
                        (let ((fetched (apply f args)))
                          (if (string= (car args) "from")
-                             (concat fetched "@hackernews.com")
+                             (concat fetched "@ycombinator.com")
                            fetched)))))
      (when (nnhackernews--gate)
        (add-function :around
