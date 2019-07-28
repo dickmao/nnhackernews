@@ -28,8 +28,8 @@ clean:
 	rm -rf tests/test-install
 
 .PHONY: test-compile
-test-compile: autoloads
-	sh -e tools/package-lint.sh
+test-compile:
+# sh -e tools/package-lint.sh nnhackernews.el
 	cask install
 	! (cask eval "(let ((byte-compile-error-on-warn t)) (cask-cli/build))" 2>&1 | egrep -a "(Warning|Error):")
 	cask clean-elc

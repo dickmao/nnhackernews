@@ -42,8 +42,17 @@
 (require 'mm-url)
 (require 'cl-lib)
 (require 'json)
+(require 'subr-x)
+(require 'request)
 
 (nnoo-declare nnhackernews)
+
+(defconst nnhackernews--group-ask "ask")
+(defconst nnhackernews--group-show "show")
+(defconst nnhackernews--group-job "job")
+(defconst nnhackernews--group-news "news")
+
+(defvar-local nnhackernews--max-item nil "Keep track of where we are")
 
 (defmacro nnhackernews--gethash (string hashtable)
   "Get corresponding value of STRING from HASHTABLE.
@@ -201,7 +210,7 @@ Normalize it to \"nnhackernews-default\"."
 (defun nnhackernews-find-header (id)
   "Retrieve for property list of ID."
   (if-let ((location (nnhackernews--gethash id nnhackernews-location-hashtb)))
-      (destructuring-bind (group index) location
+      (cl-destructuring-bind (group index) location
         (nnhackernews--get-header (1+ index) group))
     (nnhackernews--request-item id)))
 
@@ -219,25 +228,26 @@ Normalize it to \"nnhackernews-default\"."
   (when-let ((user-cookie 
               (cdr (assoc-string
                     "user"
-                    (loop with result
-                          for securep in '(t nil)
-                          do (setq result
-                                   (request-cookie-alist "news.ycombinator.com" "/" securep))
-                          until result
-                          finally return result)))))
-    (first (split-string user-cookie "&"))))
+                    (cl-loop with result
+                             for securep in '(t nil)
+                             do (setq result
+                                      (request-cookie-alist "news.ycombinator.com"
+                                                            "/" securep))
+                             until result
+                             finally return result)))))
+    (car (split-string user-cookie "&"))))
 
-(defsubst nnhackernews-refs-for (name &optional depth)
-  "Get message ancestry for NAME up to DEPTH."
+(defsubst nnhackernews-refs-for (id &optional depth)
+  "Get message ancestry for ID up to DEPTH."
   (unless depth
     (setq depth most-positive-fixnum))
   (when (> depth 0)
-    (nreverse (cl-loop with parent-id = (nnhackernews--gethash name nnhackernews-refs-hashtb)
+    (nreverse (cl-loop with parent-id = (nnhackernews--gethash id nnhackernews-refs-hashtb)
                        for level = 0 then level
-                       for name = parent-id then
-                       (nnhackernews--gethash name nnhackernews-refs-hashtb)
-                       until (null name)
-                       collect name
+                       for id = parent-id then
+                       (nnhackernews--gethash id nnhackernews-refs-hashtb)
+                       until (null id)
+                       collect id
                        until (>= (cl-incf level) depth)))))
 
 (defsubst nnhackernews--append-header (plst &optional root-item)
@@ -289,8 +299,7 @@ Refer to ROOT-ITEM for group classification if provided (otherwise use title of 
 
 (deffoo nnhackernews-server-opened (&optional server)
   (nnhackernews--normalize-server)
-  (cl-remove-if-not (lambda (proc) (string= server (process-name proc)))
-                 nnhackernews-processes))
+  t)
 
 (deffoo nnhackernews-status-message (&optional server)
   (nnhackernews--normalize-server)
@@ -321,10 +330,6 @@ Refer to ROOT-ITEM for group classification if provided (otherwise use title of 
   "Get full text of submission or comment ID at SERVER."
   (nnhackernews--normalize-server)
   (plist-get (nnhackernews-find-header id) :text))
-
-(defsubst nnhackernews-hack-name-to-id (name)
-  "Get x from t1_x (NAME)."
-  (cl-subseq name 3))
 
 (defsubst nnhackernews--br-tagify (body)
   "Hackernews html BODY shies away from <BR>.  Should it?"
@@ -403,19 +408,19 @@ Set flag for the ensuing `nnhackernews-request-group' to avoid going out to PRAW
           ;; seen-indices are one-indexed !
           (let* ((newsrc-seen-index-now
                   (if (or (not (stringp newsrc-seen-id))
-                          (zerop (nnhackernews--base10 newsrc-seen-id)))
+                          (zerop (string-to-number newsrc-seen-id)))
                       1
                     (cl-loop for cand = nil
                              for plst in headers
                              for i = 1 then (1+ i)
-                             if (= (nnhackernews--base10 (plist-get plst :id))
-                                   (nnhackernews--base10 newsrc-seen-id))
+                             if (= (string-to-number (plist-get plst :id))
+                                   (string-to-number newsrc-seen-id))
                              do (gnus-message 7 "nnhackernews-request-group: exact=%s" i)
                              and return i ;; do not go to finally
                              end
                              if (and (null cand)
-                                     (> (nnhackernews--base10 (plist-get plst :id))
-                                        (nnhackernews--base10 newsrc-seen-id)))
+                                     (> (string-to-number (plist-get plst :id))
+                                        (string-to-number newsrc-seen-id)))
                              do (gnus-message 7 "nnhackernews-request-group: cand=%s" (setq cand i))
                              end
                              finally return (or cand 0))))
@@ -473,7 +478,8 @@ Set flag for the ensuing `nnhackernews-request-group' to avoid going out to PRAW
 (defun nnhackernews--request-max-item ()
   "Retrieve the max-item from which all read-unread accounting stems."
   (let (max-item)
-    (nnhackernews--request "https://hacker-news.firebaseio.com/v0/maxitem.json"
+    (nnhackernews--request "nnhackernews--request-max-item"
+                           "https://hacker-news.firebaseio.com/v0/maxitem.json"
                            :parser 'nnhackernews--json-read
                            :success (cl-function (lambda (&key data &allow-other-keys)
                                                    (setq max-item data))))
@@ -491,13 +497,13 @@ On success, execute forms of SUCCESS."
                    (lambda (&key response error-thrown &allow-other-keys
                             &aux (response-status
                                   (request-response-status-code response)))
-                     (gnus-message 2 "%s %s: HTTP %s (%s)" caller
-                                   id response-status
+                     (gnus-message 2 "%s: HTTP %s (%s)"
+                                   caller response-status
                                    (subst-char-in-string ?\n ?\ 
                                       (error-message-string error-thrown)))))
          attributes))
 
-(defun nnhackernews--request-vote (id vote)
+(defun nnhackernews--request-vote (id _vote)
   "Tally VOTE for ID.
 
 curl -sLk --cookie /home/dick/.emacs.d/request/curl-cookie-jar --cookie-jar /home/dick/.emacs.d/request/curl-cookie-jar https://news.ycombinator.com/item?id=20531382
@@ -515,26 +521,23 @@ Then auth it."
                                         (format "https://news.ycombinator.com/%s"
                                                 (match-string 1 data))))))))
 
-(nnhackernews--request-reply (plist-get header :id)
-                                                body (stringp root-p))
-
-(defun nnhackernews--request-reply (id body _root-p)
+(defun nnhackernews--request-reply (_id _body _root-p)
   "Reply to ID with BODY."
 )
 
-(defun nnhackernews--request-edit (id body)
+(defun nnhackernews--request-edit (_id _body)
   "Replace body of ID with BODY."
 )
 
-(defun nnhackernews--request-delete (id)
+(defun nnhackernews--request-delete (_id)
   "Cancel ID."
 )
 
-(defun nnhackernews--request-submit-link (title link)
+(defun nnhackernews--request-submit-link (_title _link)
   "Submit TITLE with LINK."
 )
 
-(defun nnhackernews--request-submit-text (title text)
+(defun nnhackernews--request-submit-text (_title _text)
   "Submit TITLE with TEXT."
 )
 
@@ -548,12 +551,20 @@ Then auth it."
      :success (cl-function
                (lambda (&key data &allow-other-keys)
                  (setq plst data))))
+    (let ((id (plist-get plst :id))
+          (parent (plist-get plst :parent)))
+      (when id
+        (setq plst (plist-put plst :id (number-to-string id))))
+      (when parent
+        (setq plst (plist-put plst :parent (number-to-string parent)))))
     plst))
 
 (defun nnhackernews--incoming ()
   "Keep a global cache of the latest stories from the last `nnhackernews--cache-seconds'."
-  (when-let ((max-item (nnhackernews--request-max-item)))
-    (cl-do ((item nnhackernews--max-item (1+ item))
+  (nnhackernews-and-let* ((max-item (nnhackernews--request-max-item))
+                          (start-item (nnhackernews-aif nnhackernews--max-item it
+                                        (- max-item 100))))
+    (cl-do ((item start-item (1+ item))
             (counts (gnus-make-hashtable)))
         ((>= item max-item)
          (setq nnhackernews--max-item max-item)
@@ -574,8 +585,9 @@ Then auth it."
                                counts)
         (cl-case (intern type)
           ((story job) (nnhackernews--append-header plst))
-          ((comment) (let ((root-item (car (nnhackernews-refs-for plst))))
-                       (nnhackernews--append-header plst root-item)))
+          ((comment)
+           (let ((root-item (car (nnhackernews-refs-for (plist-get plst :id)))))
+             (nnhackernews--append-header plst root-item)))
           (otherwise (gnus-message 5 "nnhackernews-incoming: ignoring type %s" type)))))))
 
 (deffoo nnhackernews-request-scan (&optional group server)
@@ -584,14 +596,14 @@ Then auth it."
     (nnhackernews--with-group group
       (nnhackernews--incoming))))
 
-(defsubst nnhackernews--make-message-id (fullname)
-  "Construct a valid Gnus message id from FULLNAME."
-  (format "<%s@ycombinator.com>" fullname))
+(defsubst nnhackernews--make-message-id (id)
+  "Construct a valid Gnus message id from ID."
+  (format "<%s@ycombinator.com>" id))
 
-(defsubst nnhackernews--make-references (fullname)
-  "Construct a space delimited string of message ancestors of FULLNAME."
+(defsubst nnhackernews--make-references (id)
+  "Construct a space delimited string of message ancestors of ID."
   (mapconcat (lambda (ref) (nnhackernews--make-message-id ref))
-             (nnhackernews-refs-for fullname) " "))
+             (nnhackernews-refs-for id) " "))
 
 (defsubst nnhackernews--make-header (article-number &optional group)
   "Construct full headers of articled indexed ARTICLE-NUMBER in GROUP."
@@ -625,7 +637,7 @@ Then auth it."
              (mail-header (nnhackernews--make-header article-number))
              (score (cdr (assq 'X-Hackernews-Score (mail-header-extra mail-header))))
              (permalink (cdr (assq 'X-Hackernews-Permalink (mail-header-extra mail-header))))
-             (body (nnhackernews--get-body (plist-get header :id) group server)))
+             (body (nnhackernews--get-body (plist-get header :id) server)))
         (when body
           (insert
            "Newsgroups: " group "\n"
@@ -641,10 +653,10 @@ Then auth it."
            "Score: " score "\n"
            "\n")
           (nnhackernews-and-let*
-           ((parent-name (plist-get header :parent_id)) ;; parent_id is full
-            (parent-author (or (nnhackernews--gethash parent-name nnhackernews-authors-hashtb)
+           ((parent (plist-get header :parent))
+            (parent-author (or (nnhackernews--gethash parent nnhackernews-authors-hashtb)
                                "Someone"))
-            (parent-body (nnhackernews--get-body parent-name group server)))
+            (parent-body (nnhackernews--get-body parent server)))
            (insert (nnhackernews--citation-wrap parent-author parent-body)))
           (insert (nnhackernews--br-tagify body))
           (cons group article-number))))))
@@ -661,11 +673,6 @@ Then auth it."
 (deffoo nnhackernews-close-server (&optional server)
   (nnhackernews--normalize-server)
   t)
-
-(defconst nnhackernews--group-ask "ask")
-(defconst nnhackernews--group-show "show")
-(defconst nnhackernews--group-job "job")
-(defconst nnhackernews--group-news "news")
 
 (deffoo nnhackernews-request-list (&optional server)
   (nnhackernews--normalize-server)
@@ -737,8 +744,7 @@ Then auth it."
                       (nnhackernews--request-submit-link title link)
                     (error "nnhackernews-request-post: invalid url \"%s\"" link)
                     (setq ret nil))))
-          (t (puthash 'selftext body )
-             (nnhackernews--request-submit-text title body)))
+          (t (nnhackernews--request-submit-text title body)))
     ret))
 
 (add-to-list 'gnus-parameters `("^nnhackernews"
@@ -781,12 +787,9 @@ Then auth it."
                  (or (nnhackernews-and-let*
                       ((article-number (gnus-summary-article-number))
                        (header (nnhackernews--get-header article-number))
-                       (root-name (car (nnhackernews-refs-for (plist-get header :id))))
-                       (rootless (or (not (stringp root-name))
-                                     (not (string-prefix-p "t3_" root-name))
-                                     (not (nnhackernews-find-header
-                                           (gnus-group-real-name gnus-newsgroup-name)
-                                           (nnhackernews-hack-name-to-id root-name)))))
+                       (root-id (car (nnhackernews-refs-for (plist-get header :id))))
+                       (rootless (or (not (stringp root-id))
+                                     (not (nnhackernews-find-header root-id))))
                        (reply-root (read-char-choice
                                     "Reply loose thread [m]essage or [r]oot: " '(?m ?r)))
                        ((eq reply-root ?r)))
