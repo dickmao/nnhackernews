@@ -29,7 +29,7 @@ clean:
 
 .PHONY: test-compile
 test-compile:
-# sh -e tools/package-lint.sh nnhackernews.el
+	sh -e tools/package-lint.sh nnhackernews.el
 	cask install
 	! (cask eval "(let ((byte-compile-error-on-warn t)) (cask-cli/build))" 2>&1 | egrep -a "(Warning|Error):")
 	cask clean-elc
@@ -87,4 +87,4 @@ install: dist
 	emacs -Q --batch --eval "(package-initialize)" \
 	  --eval "(add-to-list 'package-archives '(\"melpa\" . \"http://melpa.org/packages/\"))" \
 	  --eval "(package-refresh-contents)" \
-	  --eval "(package-install-file (car (file-expand-wildcards \"dist/nnhackernews*.tar\")))"
+	  --eval "(package-install-file (car (file-expand-wildcards \"dist/nnhackernews*.el\")))"
