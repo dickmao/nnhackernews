@@ -52,7 +52,24 @@
 (defconst nnhackernews--group-job "job")
 (defconst nnhackernews--group-news "news")
 
+(defcustom nnhackernews-localhost "127.0.0.1"
+  "Some users keep their browser in a separate domain.
+
+Do not set this to \"localhost\" as a numeric IP is required for the oauth handshake."
+  :type 'string
+  :group 'nnhackernews)
+
+(defcustom nnhackernews-max-items-per-scan 100
+  "Maximum items to fetch from firebase each refresh cycle."
+  :type 'integer
+  :group 'nnhackernews)
+
 (defvar nnhackernews--max-item nil "Keep track of where we are.")
+
+(defvar nnhackernews--debug-request-items nil "Keep track of ids to re-request for testing.")
+
+(defvar nnhackernews--last-scan-time (truncate (float-time))
+  "Don't scan more than once every few seconds.")
 
 (defsubst nnhackernews--gethash (string hashtable &optional dflt)
   "Get corresponding value of STRING from HASHTABLE, or DFLT if undefined.
@@ -104,18 +121,6 @@ Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtab
     (define-key map "R" 'gnus-summary-followup-with-original)
     (define-key map "F" 'gnus-summary-followup-with-original)
     map))
-
-(defcustom nnhackernews-localhost "127.0.0.1"
-  "Some users keep their browser in a separate domain.
-
-Do not set this to \"localhost\" as a numeric IP is required for the oauth handshake."
-  :type 'string
-  :group 'nnhackernews)
-
-(defcustom nnhackernews-max-items-per-scan 40
-  "Maximum items to fetch from firebase each refresh cycle."
-  :type 'integer
-  :group 'nnhackernews)
 
 (define-minor-mode nnhackernews-article-mode
   "Minor mode for nnhackernews articles.  Disallow `gnus-article-reply-with-original'.
@@ -209,6 +214,9 @@ Normalize it to \"nnhackernews-default\"."
 (defvar nnhackernews-location-hashtb (gnus-make-hashtable)
   "Id -> ( group . index ).")
 
+(defvar nnhackernews-root-hashtb (gnus-make-hashtable)
+  "Id -> possibly ancient header.")
+
 (defvar nnhackernews-headers-hashtb (gnus-make-hashtable)
   "Group -> headers.")
 
@@ -225,45 +233,42 @@ Normalize it to \"nnhackernews-default\"."
 (defun nnhackernews-find-header (id &optional noquery)
   "Retrieve property list of ID.
 
-If NOQUERY is non-nil, do not query firebase if header not already recorded."
-  (when id
-    (if-let ((location (nnhackernews--gethash id nnhackernews-location-hashtb)))
-        (cl-destructuring-bind (group . index) location
-          (nnhackernews--get-header (1+ index) group))
-      (unless noquery
-        (nnhackernews--request-item id)))))
+If NOQUERY, return nil and avoid querying if not extant."
+  (if-let ((location (nnhackernews--gethash id nnhackernews-location-hashtb)))
+      (cl-destructuring-bind (group . index) location
+        (nnhackernews--get-header (1+ index) group))
+    (unless noquery
+      (nnhackernews--request-item id))))
 
-(defsubst nnhackernews-refs-for (id &optional depth)
-  "Get message ancestry for ID up to DEPTH."
-  (unless depth
-    (setq depth most-positive-fixnum))
-  (when (> depth 0)
-    (nreverse (cl-loop with requests = 0
-                       with level = 0
-                       for prev-id = id then cur-id
-                       for cur-id =
-                         (let ((cached (nnhackernews--gethash prev-id
-                                                              nnhackernews-refs-hashtb
-                                                              'NULL)))
-                           (if (eq cached 'NULL)
-                               (let ((plst (nnhackernews--request-item prev-id)))
-                                 (cl-incf requests)
-                                 (nnhackernews-add-entry nnhackernews-refs-hashtb
-                                                         plst :parent)
-                                 (plist-get plst :parent))
-                             cached))
-                       until (or (null cur-id) (>= (cl-incf level) depth))
-                       collect cur-id into result
-                       finally do
-                         (gnus-message 7 "nnhackernews-refs-for %s: %s requests" id requests)
-                         (cl-return result)))))
+(defsubst nnhackernews-refs-for (id)
+  "Return descending ancestors as list for ID."
+  (cl-loop with root-plst
+           for prev-id = id then cur-id
+           for cur-id =
+           (let ((cached (nnhackernews--gethash prev-id
+                                                nnhackernews-refs-hashtb
+                                                'NULL)))
+             (if (eq cached 'NULL)
+                 (progn (setq root-plst (nnhackernews--request-item prev-id))
+                        (nnhackernews-add-entry nnhackernews-refs-hashtb
+                                                root-plst :parent)
+                        (plist-get root-plst :parent))
+               (setq root-plst (nnhackernews-find-header prev-id t))
+               cached))
+           until (null cur-id)
+           collect cur-id into rresult
+           finally do
+           (let ((result (nreverse rresult)))
+             (when (and result
+                        (string= (plist-get root-plst :id) (car result)))
+               (nnhackernews--sethash (car result) root-plst
+                                      nnhackernews-root-hashtb))
+             (cl-return result))))
 
-(defun nnhackernews--retrieve-root (header &optional noquery)
-  "Retrieve property list header corresponding to HEADER.
-
-If NOQUERY is non-nil, do not query firebase if header not already recorded."
+(defun nnhackernews--retrieve-root (header)
+  "Retrieve and cache property list HEADER root."
   (if-let ((root-id (car (nnhackernews-refs-for (plist-get header :id)))))
-      (nnhackernews-find-header root-id noquery)
+      (nnhackernews--gethash root-id nnhackernews-root-hashtb)
     header))
 
 (defun nnhackernews--group-for (header)
@@ -398,8 +403,12 @@ Originally written by Paul Issartel."
 
 (deffoo nnhackernews-request-group-scan (group &optional server _info)
   "M-g from *Group* calls this."
-  (nnhackernews-request-scan group server)
-  t)
+  (nnhackernews--normalize-server)
+  (nnhackernews--with-group group
+    (gnus-message 5 "nnhackernews-request-group-scan: scanning %s..." group)
+    (gnus-activate-group (gnus-group-full-name group '("nnhackernews" (or server ""))) t)
+    (gnus-message 5 "nnhackernews-request-group-scan: scanning %s...done" group)
+    t))
 
 ;; gnus-group-select-group
 ;;   gnus-group-read-group
@@ -445,7 +454,7 @@ Originally written by Paul Issartel."
                   (if (or (not (stringp newsrc-seen-id))
                           (zerop (string-to-number newsrc-seen-id)))
                       1
-                    (cl-loop for cand = nil
+                    (cl-loop with cand = nil
                              for plst in headers
                              for i = 1 then (1+ i)
                              if (= (string-to-number (plist-get plst :id))
@@ -497,10 +506,8 @@ Originally written by Paul Issartel."
              (cons `(last-seen ,updated-seen-index . ,updated-seen-id) params)
              t)
             (gnus-set-info gnus-newsgroup-name info)
-            (gnus-message 7 "nnhackernews-request-group: new info=%s" info)))))
+            (gnus-message 7 "nnhackernews-request-group: new info=%S" info)))))
     t))
-
-(defconst nnhackernews--cache-seconds 9 "Avoid refetching for these many seconds.")
 
 (defsubst nnhackernews--json-read ()
   "Copied from ein:json-read() by tkf."
@@ -583,6 +590,7 @@ On success, execute forms of SUCCESS."
 
 (defun nnhackernews--request-item (id)
   "Retrieve ID as a property list."
+  (push id nnhackernews--debug-request-items)
   (let (plst)
     (nnhackernews--request
      "nnhackernews--request-item"
@@ -606,35 +614,38 @@ STATIC-NEWSTORIES can be provided in lieu of querying out.
 
 Since we are constrained by `nnhackernews-max-items-per-scan', we prioritize
 stories and may throw away comments, etc."
-  (if (> (1+ (- max-item start-item)) nnhackernews-max-items-per-scan)
-      (let* ((stories (seq-take-while
-                       (lambda (x) (>= x start-item))
-                       (or static-newstories (nnhackernews--request-newstories))))
-             (excess (- nnhackernews-max-items-per-scan (length stories))))
-        (if (<= excess 0)
-            (nreverse (cl-subseq stories 0 nnhackernews-max-items-per-scan))
-          (cl-loop with excess-count = 0
-                   with j = 0
-                   for i from max-item downto start-item by 1
-                   until (or (>= excess-count excess) (>= j (length stories)))
-                   if (= i (elt stories j))
-                     do (cl-incf j)
-                   else
-                     do (cl-incf excess-count)
-                   end
-                   collect i into result
-                   finally return (nreverse (append result (nthcdr j stories)
-                                                    (cl-loop for k from 0 below
-                                                             (- excess excess-count) by 1
-                                                             collect (- i k)))))))
-    (cl-loop for i from start-item to max-item by 1
-             collect i)))
+  (mapcar
+   #'number-to-string
+   (if (> (1+ (- max-item start-item)) nnhackernews-max-items-per-scan)
+       (let* ((stories (seq-take-while
+                        (lambda (x) (>= x start-item))
+                        (or static-newstories (nnhackernews--request-newstories))))
+              (excess (- nnhackernews-max-items-per-scan (length stories))))
+         (if (<= excess 0)
+             (nreverse (cl-subseq stories 0 nnhackernews-max-items-per-scan))
+           (cl-loop with excess-count = 0
+                    with j = 0
+                    for i from max-item downto start-item by 1
+                    until (or (>= excess-count excess) (>= j (length stories)))
+                    if (= i (elt stories j))
+                    do (cl-incf j)
+                    else
+                    do (cl-incf excess-count)
+                    end
+                    collect i into result
+                    finally return (nreverse (append result (nthcdr j stories)
+                                                     (cl-loop for k from 0 below
+                                                              (- excess excess-count) by 1
+                                                              collect (- i k)))))))
+     (cl-loop for i from start-item to max-item by 1
+              collect i))))
 
 (defun nnhackernews--incoming (&optional static-max-item static-newstories)
-  "Record the latest stories from the last `nnhackernews--cache-seconds'.
+  "Drink from the firehose.
 
 Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out."
   (interactive)
+  (setq nnhackernews--debug-request-items nil)
   (when-let ((max-item (or static-max-item (nnhackernews--request-max-item))))
     (let* ((start-item (1+ (or nnhackernews--max-item
                                (- max-item nnhackernews-max-items-per-scan))))
@@ -647,9 +658,9 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
           (nnhackernews-add-entry nnhackernews-authors-hashtb plst :by)
           (nnhackernews--replace-hash type (lambda (x) (1+ (or x 0))) counts)
           (setq plst (plist-put plst :link_title
-                                (plist-get
-                                 (nnhackernews--retrieve-root plst)
-                                 :title)))
+                                (or (plist-get
+                                     (nnhackernews--retrieve-root plst)
+                                     :title) "")))
           (cl-case (intern type)
             (job (nnhackernews--append-header plst nnhackernews--group-job))
             ((story comment) (nnhackernews--append-header plst))
@@ -657,6 +668,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
       (setq nnhackernews--max-item max-item)
       (gnus-message
        5 (concat "nnhackernews-request-scan: "
+                 (format "%d requests, " (length nnhackernews--debug-request-items))
                  (let ((result ""))
                    (nnhackernews--maphash
                     (lambda (key value)
@@ -667,8 +679,16 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
 (deffoo nnhackernews-request-scan (&optional group server)
   (nnhackernews--normalize-server)
   (when group
-    (nnhackernews--with-group group
-      (nnhackernews--incoming))))
+    (if (> 2 (- (truncate (float-time)) nnhackernews--last-scan-time))
+        (gnus-message 7 "nnhackernews-request-scan: last scanned at %s"
+                      (current-time-string nnhackernews--last-scan-time))
+      (nnhackernews--with-group group
+        (cl-destructuring-bind (seconds num-gc seconds-gc)
+            (benchmark-run (nnhackernews--incoming))
+          (setq nnhackernews--last-scan-time (truncate (float-time)))
+          (gnus-message 5 (concat "nnhackernews-request-scan: Took %s seconds,"
+                                  " with %s gc runs taking %s seconds")
+                        seconds num-gc seconds-gc))))))
 
 (defsubst nnhackernews--make-message-id (id)
   "Construct a valid Gnus message id from ID."
@@ -853,56 +873,6 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
 
 ;; `gnus-newsgroup-p' requires valid method post-mail to return t
 (add-to-list 'gnus-valid-select-methods '("nnhackernews" post-mail) t)
-
-;; Add prompting for replying to thread root to gnus-summary-followup.
-;; The interactive spec of gnus-summary-followup is putatively preserved.
-(let* ((prompt-loose
-        (lambda (f &rest args)
-          (cond ((nnhackernews--gate)
-                 (or (nnhackernews-and-let*
-                      ((article-number (gnus-summary-article-number))
-                       (header (nnhackernews--get-header article-number))
-                       (rootless (null (nnhackernews--retrieve-root header t)))
-                       (reply-root (read-char-choice
-                                    "Reply loose thread [m]essage or [r]oot: " '(?m ?r)))
-                       ((eq reply-root ?r)))
-                      (let* ((link-header (apply-partially #'message-add-header
-                                                           "Reply-Root: yes"))
-                             (add-link-header (apply-partially #'add-hook
-                                                               'message-header-setup-hook
-                                                               link-header))
-                             (remove-link-header (apply-partially #'remove-hook
-                                                                  'message-header-setup-hook
-                                                                  link-header)))
-                        (funcall add-link-header)
-                        (condition-case err
-                            (progn
-                              (apply f args)
-                              (funcall remove-link-header))
-                          (error (funcall remove-link-header)
-                                 (error (error-message-string err)))))
-                      t)
-                     (apply f args)))
-                (t (apply f args)))))
-       (advise-gnus-summary-followup
-        (lambda ()
-          (add-function :around (symbol-function 'gnus-summary-followup) prompt-loose)))
-       (suspend-prompt-loose
-        (lambda (f &rest args)
-          (cond ((nnhackernews--gate)
-                 (remove-function (symbol-function 'gnus-summary-followup) prompt-loose)
-                 (condition-case err
-                     (prog1 (apply f args)
-                       (funcall advise-gnus-summary-followup))
-                   (error (funcall advise-gnus-summary-followup)
-                          (error (error-message-string err)))))
-                (t (apply f args)))))
-       (advise-gnus-summary-cancel-article
-        (lambda ()
-          (add-function :around (symbol-function 'gnus-summary-cancel-article)
-                        suspend-prompt-loose))))
-  (funcall advise-gnus-summary-cancel-article)
-  (funcall advise-gnus-summary-followup))
 
 (add-function
  :around (symbol-function 'message-supersede)
