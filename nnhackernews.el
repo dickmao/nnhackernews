@@ -375,11 +375,37 @@ If GROUP classification omitted, figure it out."
 (defun nnhackernews--get-body (header &optional server)
   "Get full text of submission or comment HEADER at SERVER."
   (nnhackernews--normalize-server)
-  (or (plist-get header :url) (plist-get header :text)))
+  (if-let ((url (plist-get header :url)))
+      (format "<div><p><a href=\"%s\">%s</a></div>" url url)
+    (plist-get header :text)))
 
-(defsubst nnhackernews--br-tagify (body)
-  "Hackernews html BODY shies away from <BR>.  Should it?"
-  (replace-regexp-in-string "\n" "<br>" body))
+(defun nnhackernews--massage (body)
+  "Precede each quoted line of BODY broken by `shr-fill-line' with '>'."
+  (with-temp-buffer
+    (insert body)
+    (mm-url-decode-entities)
+    (cl-loop initially (goto-char (point-min))
+             until (and (null (re-search-forward "\\(^>\\(.*?\\)\\)<p>" nil t))
+                        (null (re-search-forward "\\(<p>\\s-*>\\(.*?\\)\\)<p>" nil t)))
+             do (let* ((start (match-beginning 1))
+                       (end (match-end 1))
+                       (matched (match-string 2)))
+                  (perform-replace
+                   ".*"
+                   (concat "<p>\n"
+                           (with-temp-buffer
+                             (insert matched)
+                             (fill-region (point-min) (point-max))
+                             (insert
+                              (prog1
+                                  (cl-subseq (replace-regexp-in-string
+                                              "\n" "<br>\n> " (concat "\n" (buffer-string)))
+                                             5)
+                                (erase-buffer)))
+                             (buffer-string))
+                           "\n")
+                   nil t nil nil nil start end)))
+    (buffer-string)))
 
 (defsubst nnhackernews--citation-wrap (author body)
   "Cite AUTHOR using `gnus-message-cite-prefix-regexp' before displaying BODY.
@@ -392,7 +418,7 @@ Originally written by Paul Issartel."
     (fill-region (point-min) (point-max))
     (let* ((trimmed-1 (replace-regexp-in-string "\\(\\s-\\|\n\\)+$" "" (buffer-string)))
            (trimmed (replace-regexp-in-string "^\\(\\s-\\|\n\\)+" "" trimmed-1)))
-      (concat author " wrote:<br>\n"
+      (concat author " wrote:<p>\n"
               "<pre>\n"
               (cl-subseq (replace-regexp-in-string "\n" "\n> " (concat "\n" trimmed)) 1)
               "\n</pre><p>"))))
@@ -599,13 +625,11 @@ On success, execute forms of SUCCESS."
      :success (cl-function
                (lambda (&key data &allow-other-keys)
                  (setq plst data))))
-    (let ((id (plist-get plst :id))
-          (parent (plist-get plst :parent)))
-      (when id
-        (setq plst (plist-put plst :id (number-to-string id))))
-      (when parent
-        (setq plst (plist-put plst :parent (number-to-string parent)))))
-    plst))
+    (when-let ((id (plist-get plst :id)))
+      (setq plst (plist-put plst :id (number-to-string id)))
+      (when-let (parent (plist-get plst :parent))
+        (setq plst (plist-put plst :parent (number-to-string parent))))
+      plst)))
 
 (defun nnhackernews--select-items (start-item max-item &optional static-newstories)
   "Return a list of items to retrieve between START-ITEM and MAX-ITEM.
@@ -653,6 +677,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
            (items (nnhackernews--select-items start-item max-item static-newstories)))
       (dolist (item items)
         (nnhackernews-and-let* ((plst (nnhackernews--request-item item))
+                                ((not (plist-get plst :deleted)))
                                 (type (plist-get plst :type)))
           (nnhackernews-add-entry nnhackernews-refs-hashtb plst :parent)
           (nnhackernews-add-entry nnhackernews-authors-hashtb plst :by)
@@ -750,7 +775,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                                "Someone"))
             (parent-body (nnhackernews--get-body (nnhackernews-find-header parent) server)))
            (insert (nnhackernews--citation-wrap parent-author parent-body)))
-          (insert (nnhackernews--br-tagify body))
+          (insert (nnhackernews--massage body))
           (cons group article-number))))))
 
 (deffoo nnhackernews-retrieve-headers (article-numbers &optional group server _fetch-old)
@@ -842,6 +867,29 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
           (t (nnhackernews--request-submit-text title body)))
     ret))
 
+(defun nnhackernews--browse-story (&rest _args)
+  "What happens when I click on hackernews Subject."
+  (when gnus-article-current
+    (browse-url (plist-get (nnhackernews--retrieve-root
+                            (nnhackernews--get-header
+                             (cdr gnus-article-current)
+                             (gnus-group-real-name (car gnus-article-current))))
+                           :url))))
+
+(defun nnhackernews--header-button-alist ()
+  "Construct a buffer-local `gnus-header-button-alist' for nnhackernews."
+  (let* ((result (copy-alist gnus-header-button-alist))
+         (references-value (assoc-default "References" result
+                                          (lambda (x y) (string-match-p y x))))
+         (references-key (car (rassq references-value result))))
+    (setq result (cl-delete "^Subject:" result :test (lambda (x y) (cl-search x (car y)))))
+    (setq result (cl-delete references-key result :test (lambda (x y) (cl-search x (car y)))))
+    (push `("^\\(Message-I[Dd]\\|^In-Reply-To\\):" ,references-value) result)
+    (push '("^Subject:" ".*" 0 (>= gnus-button-browse-level 0)
+            nnhackernews--browse-story 0)
+          result)
+    result))
+
 (add-to-list 'gnus-parameters `("^nnhackernews"
                                 (gnus-summary-make-false-root 'adopt)
                                 (gnus-cite-hide-absolute 5)
@@ -850,10 +898,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                                 (gnus-auto-extend-newsgroup nil)
                                 (gnus-add-timestamp-to-message t)
                                 (gnus-header-button-alist
-                                 (quote ,(cons '("^\\(Message-I[Dd]\\|^In-Reply-To\\):" "<[^<>]+>"
-                                           0 (>= gnus-button-message-level 0)
-                                           gnus-button-message-id 0)
-                                         (cdr gnus-header-button-alist))))
+                                 (quote ,(nnhackernews--header-button-alist)))
                                 (gnus-visible-headers ,(concat gnus-visible-headers "\\|^Score:"))))
 
 (nnoo-define-skeleton nnhackernews)
