@@ -884,9 +884,9 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
          (references-key (car (rassq references-value result))))
     (setq result (cl-delete "^Subject:" result :test (lambda (x y) (cl-search x (car y)))))
     (setq result (cl-delete references-key result :test (lambda (x y) (cl-search x (car y)))))
-    (push `("^\\(Message-I[Dd]\\|^In-Reply-To\\):" ,references-value) result)
-    (push '("^Subject:" ".*" 0 (>= gnus-button-browse-level 0)
-            nnhackernews--browse-story 0)
+    (push (append '("^\\(Message-I[Dd]\\|^In-Reply-To\\):") references-value) result)
+    (push '("^Subject:" ": *\\(.+\\)$" 1 (>= gnus-button-browse-level 0)
+            nnhackernews--browse-story 1)
           result)
     result))
 
