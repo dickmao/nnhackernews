@@ -501,7 +501,7 @@ Originally written by Paul Issartel."
                                                             (not (plist-get plst :title))))
                                             it -1)))
                  (updated-seen-id (nnhackernews-aif (nth (1- updated-seen-index) headers)
-                                      (plist-get it :id) ""))
+                                      (plist-get it :id) nil))
                  (delta (if newsrc-seen-index
                             (max 0 (- newsrc-seen-index newsrc-seen-index-now))
                           0))
@@ -525,12 +525,13 @@ Originally written by Paul Issartel."
              info
              (append (assq-delete-all 'seen (gnus-info-marks info))
                      (list `(seen (1 . ,num-headers)))))
-            (while (assq 'last-seen params)
-              (gnus-alist-pull 'last-seen params))
-            (gnus-info-set-params
-             info
-             (cons `(last-seen ,updated-seen-index . ,updated-seen-id) params)
-             t)
+            (when updated-seen-id
+              (while (assq 'last-seen params)
+                (gnus-alist-pull 'last-seen params))
+              (gnus-info-set-params
+               info
+               (cons `(last-seen ,updated-seen-index . ,updated-seen-id) params)
+               t))
             (gnus-set-info gnus-newsgroup-name info)
             (gnus-message 7 "nnhackernews-request-group: new info=%S" info)))))
     t))
@@ -617,7 +618,10 @@ On success, execute forms of SUCCESS."
 (defun nnhackernews--request-item (id)
   "Retrieve ID as a property list."
   (push id nnhackernews--debug-request-items)
-  (let (plst)
+  (let ((utf-decoder (lambda (x)
+                       (decode-coding-string (string-make-unibyte x) 'utf-8)))
+        plst)
+    (add-function :filter-return (symbol-function 'json-read-string) utf-decoder)
     (nnhackernews--request
      "nnhackernews--request-item"
      (format "https://hacker-news.firebaseio.com/v0/item/%s.json" id)
@@ -625,6 +629,7 @@ On success, execute forms of SUCCESS."
      :success (cl-function
                (lambda (&key data &allow-other-keys)
                  (setq plst data))))
+    (remove-function (symbol-function 'json-read-string) utf-decoder)
     (when-let ((id (plist-get plst :id)))
       (setq plst (plist-put plst :id (number-to-string id)))
       (when-let (parent (plist-get plst :parent))
