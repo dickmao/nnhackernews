@@ -609,7 +609,7 @@ On success, execute forms of SUCCESS."
 
 (defun nnhackernews--request-submit-link (_title _link)
   "Submit TITLE with LINK."
-)
+  )
 
 (defun nnhackernews--request-submit-text (_title _text)
   "Submit TITLE with TEXT."
@@ -1017,12 +1017,18 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
        (error (remove-function (symbol-function 'message-fetch-field) concat-func)
               (error (error-message-string err)))))))
 
-;; disallow caching as the article numbering is wont to change
-;; after PRAW restarts!
+;; disallow caching as firebase might change the article numbering?
 (setq gnus-uncacheable-groups
       (nnhackernews-aif gnus-uncacheable-groups
           (format "\\(%s\\)\\|\\(^nnhackernews\\)" it)
         "^nnhackernews"))
+
+(push '((and (eq (car gnus-current-select-method) 'nnhackernews)
+             (eq mark gnus-unread-mark)
+             (not (string-match-p
+                   "^Re: " (gnus-summary-article-subject))))
+        . gnus-summary-high-unread)
+      gnus-summary-highlight)
 
 (provide 'nnhackernews)
 
