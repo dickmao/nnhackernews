@@ -71,6 +71,13 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
 (defvar nnhackernews--last-scan-time (truncate (float-time))
   "Don't scan more than once every few seconds.")
 
+(defmacro nnhackernews--callback (result &optional callback)
+  "Set RESULT to return value of CALLBACK."
+  `(cl-function (lambda (&rest args &key data &allow-other-keys)
+                  (setq ,result (if ,callback
+                                    (apply ,callback args)
+                                  data)))))
+
 (defsubst nnhackernews--gethash (string hashtable &optional dflt)
   "Get corresponding value of STRING from HASHTABLE, or DFLT if undefined.
 
@@ -547,53 +554,56 @@ Originally written by Paul Issartel."
 (defun nnhackernews--request-max-item ()
   "Retrieve the max-item from which all read-unread accounting stems."
   (let (max-item)
-    (nnhackernews--request "nnhackernews--request-max-item"
-                           "https://hacker-news.firebaseio.com/v0/maxitem.json"
-                           :parser 'nnhackernews--json-read
-                           :success (cl-function (lambda (&key data &allow-other-keys)
-                                                   (setq max-item data))))
+    (nnhackernews--request
+     "nnhackernews--request-max-item"
+     "https://hacker-news.firebaseio.com/v0/maxitem.json"
+     :parser 'nnhackernews--json-read
+     :success (nnhackernews--callback max-item))
     max-item))
 
 (defun nnhackernews--request-newstories ()
   "Return list of id's which we know to be stories (as opposed to comments)."
   (let (stories)
-    (nnhackernews--request "nnhackernews--request-newstories"
-                           "https://hacker-news.firebaseio.com/v0/newstories.json"
-                           :parser 'buffer-string
-                           :success (cl-function
-                                     (lambda (&key data &allow-other-keys)
-                                       (setq stories (append (eval (car (read-from-string (subst-char-in-string ?, ?\  data)))) nil)))))
+    (nnhackernews--request
+     "nnhackernews--request-newstories"
+     "https://hacker-news.firebaseio.com/v0/newstories.json"
+     :success (nnhackernews--callback
+               stories
+               (cl-function
+                (lambda (&key data &allow-other-keys)
+                  ;; manual recommended listify appends nil
+                  (append
+                   (eval (car (read-from-string (subst-char-in-string ?, ?\  data))))
+                   nil)))))
     stories))
 
-(cl-defun nnhackernews--request (caller url &rest attributes &key parser &allow-other-keys)
-  "Prefix errors with CALLER when executing synchronous request to URL.
-
-On success, execute forms of SUCCESS."
+(cl-defun nnhackernews--request (caller url
+                                 &rest attributes &key parser (backend 'url-retrieve)
+                                 &allow-other-keys)
+  "Prefix errors with CALLER when executing synchronous request to URL."
   (unless parser
     (setq attributes (nconc attributes (list :parser #'buffer-string))))
-  (let ((request-backend 'url-retrieve))
+  (setq attributes (cl-loop for (k v) on attributes by (function cddr)
+                            unless (eq k :backend)
+                            collect k and collect v))
+  (let ((request-backend backend))
     (apply #'request url
-          :sync t
-          :error (cl-function
-                  (lambda (&key response error-thrown &allow-other-keys
-                                &aux (response-status
-                                      (request-response-status-code response)))
-                    (gnus-message 2 "%s: HTTP %s (%s)"
-                                  caller response-status
-                                  (subst-char-in-string ?\n ?\  (error-message-string error-thrown)))))
-          attributes)))
+           :sync t
+           :error (apply-partially #'nnhackernews--request-error caller)
+           attributes)))
+
+(cl-defun nnhackernews--request-vote-success (&key data &allow-other-keys)
+  "Return t if seeming success."
+  data)
 
 (defun nnhackernews--request-vote (id _vote)
-  "Tally VOTE for ID."
-  (nnhackernews--request
-   "nnhackernews--request-vote"
-   (format "https://news.ycombinator.com/item/id=%s" id)
-   :success (cl-function
-             (lambda (&key data &allow-other-keys)
-               (when (string-match "\\(href='[^']+'\\)" data)
-                 (nnhackernews--request "nnhackernews--request-vote"
-                                        (format "https://news.ycombinator.com/%s"
-                                                (match-string 1 data))))))))
+  "Tally VOTE for ID.  Fixme need to get the auth field."
+  (let (result)
+    (nnhackernews--request
+     "nnhackernews--request-vote"
+     (format "https://news.ycombinator.com/item/id=%s" id)
+     :success (nnhackernews--callback result #'nnhackernews--request-vote-success))
+    result))
 
 (defun nnhackernews--request-reply (_id _body _root-p)
   "Reply to ID with BODY."
@@ -607,9 +617,37 @@ On success, execute forms of SUCCESS."
   "Cancel ID."
 )
 
+(defsubst nnhackernews--enforce-curl ()
+  "Curl must exist."
+  (unless (executable-find "curl")
+    (error "nnhackernews--enforce-curl: the 'curl' program was not found")))
+
+(cl-defun nnhackernews--request-submit-error (caller
+                                              &key response
+                                              &allow-other-keys
+                                              &aux (response-status
+                                                    (request-response-status-code response)))
+  "Refer to CALLER when reporting a submit error."
+  (gnus-message 3 "%s: http status %s" caller response-status))
+
+(cl-defun nnhackernews--request-error (caller
+                                       &key response symbol-status error-thrown
+                                       &allow-other-keys
+                                       &aux (response-status
+                                             (request-response-status-code response)))
+  "Refer to CALLER when reporting a submit error."
+  (gnus-message 3 "%s %s: http status %s, %s" caller symbol-status response-status
+                (error-message-string error-thrown)))
+
 (defun nnhackernews--request-submit-link (_title _link)
   "Submit TITLE with LINK."
-  )
+  (nnhackernews--enforce-curl)
+  (let (result)
+    (nnhackernews--request
+     "nnhackernews--request-submit-link"
+     "https://news.ycombinator.com/submit"
+     :backend 'curl)
+    result))
 
 (defun nnhackernews--request-submit-text (_title _text)
   "Submit TITLE with TEXT."
@@ -626,9 +664,7 @@ On success, execute forms of SUCCESS."
      "nnhackernews--request-item"
      (format "https://hacker-news.firebaseio.com/v0/item/%s.json" id)
      :parser 'nnhackernews--json-read
-     :success (cl-function
-               (lambda (&key data &allow-other-keys)
-                 (setq plst data))))
+     :success (nnhackernews--callback plst))
     (remove-function (symbol-function 'json-read-string) utf-decoder)
     (when-let ((id (plist-get plst :id)))
       (setq plst (plist-put plst :id (number-to-string id)))
@@ -828,6 +864,52 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
     (when (string-prefix-p magic string)
       (message "%s: %s" server (substring string (length magic))))))
 
+(defconst nnhackernews--fnid "name\\s-*=\\s-*\"?fnid\"?\\s-+value\\s-*=\\s-*\"?[^\"]+\"?")
+(defconst nnhackernews--fnop "name\\s-*=\\s-*\"?fnop\"?\\s-+value\\s-*=\\s-*\"?[^\"]+\"?")
+
+(defun nnhackernews--login-page (goto)
+  "Store a cookie from `https://news.ycombinator.com/login', then GOTO."
+  (let* (result
+         (auth-source-creation-prompts '((user . "news.ycombinator.com user: ")
+                                         (secret . "Password for %u: ")))
+         (found (car (auth-source-search :max 1 :host "news.ycombinator.com" :require
+                                         '(:user :secret) :create t))))
+    (nnhackernews--request
+     "nnhackernews--login-page"
+     "https://news.ycombinator.com/login"
+     :backend 'curl
+     :data `(("acct" . ,(plist-get found :user))
+             ("pw" . ,(plist-get found :secret))
+             ("goto" . ,goto))
+     :success (nnhackernews--callback result))
+    result))
+
+(defsubst nnhackernews--domify (html)
+  "Parse HTML into dom."
+  (with-temp-buffer
+    (insert html)
+    (libxml-parse-html-region (point-min) (point-max))))
+
+(cl-defun nnhackernews--submit-page-success (&key data &allow-other-keys)
+  "If necessary, login first, then return plist of :fnid and :fnop."
+  (let* ((dom (nnhackernews--domify data))
+         (form (car (alist-get 'form (alist-get 'body dom))))
+         (login-p (string= "submit" (alist-get 'action form))))
+    (when login-p
+      )
+      
+    ))
+
+(defun nnhackernews--submit-page ()
+  "Get the hidden fields FNID and FNOP from `https://news.ycombinator.com/submit'."
+  (let (result)
+    (nnhackernews--request
+     "nnhackernews--submit-page"
+     "https://news.ycombinator.com/submit"
+     :backend 'curl
+     :success (nnhackernews--callback result #'nnhackernews--submit-page-success))
+    result))
+
 (defsubst nnhackernews--extract-name (from)
   "String match on something looking like t1_es076hd in FROM."
   (and (stringp from) (string-match "\\(t[0-9]+_[a-z0-9]+\\)" from) (match-string 1 from)))
@@ -840,37 +922,38 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
 ;; nnhackernews-request-post
 (deffoo nnhackernews-request-post (&optional server)
   (nnhackernews--normalize-server)
-  (let* ((ret t)
-         (title (or (message-fetch-field "Subject") (error "No Subject field")))
-         (link (message-fetch-field "Link"))
-         (reply-p (not (null message-reply-headers)))
-         (edit-name (nnhackernews--extract-name (message-fetch-field "Supersedes")))
-         (cancel-name (nnhackernews--extract-name (message-fetch-field "Control")))
-         (root-p (message-fetch-field "Reply-Root"))
-         (article-number (cdr gnus-article-current))
-         (group (if (numberp article-number)
-                    (gnus-group-real-name (car gnus-article-current))
-                  (or (message-fetch-field "Newsgroups") (error "No Newsgroups field"))))
-         (header (when (numberp article-number)
-                   (nnhackernews--get-header article-number group)))
-         (body
-          (save-excursion
-            (save-restriction
-              (message-goto-body)
-              (narrow-to-region (point) (point-max))
-              (buffer-string)))))
-    (cond (cancel-name (nnhackernews--request-delete cancel-name))
-          (edit-name (nnhackernews--request-edit edit-name body))
-          (reply-p (nnhackernews--request-reply (plist-get header :id)
-                                                body (stringp root-p)))
-          (link (let* ((parsed-url (url-generic-parse-url link))
-                       (host (url-host parsed-url)))
-                  (if (and (stringp host) (not (zerop (length host))))
-                      (nnhackernews--request-submit-link title link)
-                    (error "nnhackernews-request-post: invalid url \"%s\"" link)
-                    (setq ret nil))))
-          (t (nnhackernews--request-submit-text title body)))
-    ret))
+  (when-let ((remote-fields (nnhackernews--submit-page)))
+    (let* ((ret t)
+           (title (or (message-fetch-field "Subject") (error "No Subject field")))
+           (link (message-fetch-field "Link"))
+           (reply-p (not (null message-reply-headers)))
+           (edit-name (nnhackernews--extract-name (message-fetch-field "Supersedes")))
+           (cancel-name (nnhackernews--extract-name (message-fetch-field "Control")))
+           (root-p (message-fetch-field "Reply-Root"))
+           (article-number (cdr gnus-article-current))
+           (group (if (numberp article-number)
+                      (gnus-group-real-name (car gnus-article-current))
+                    (or (message-fetch-field "Newsgroups") (error "No Newsgroups field"))))
+           (header (when (numberp article-number)
+                     (nnhackernews--get-header article-number group)))
+           (body
+            (save-excursion
+              (save-restriction
+                (message-goto-body)
+                (narrow-to-region (point) (point-max))
+                (buffer-string)))))
+      (cond (cancel-name (nnhackernews--request-delete cancel-name))
+            (edit-name (nnhackernews--request-edit edit-name body))
+            (reply-p (nnhackernews--request-reply (plist-get header :id)
+                                                  body (stringp root-p)))
+            (link (let* ((parsed-url (url-generic-parse-url link))
+                         (host (url-host parsed-url)))
+                    (if (and (stringp host) (not (zerop (length host))))
+                        (nnhackernews--request-submit-link title link)
+                      (error "nnhackernews-request-post: invalid url \"%s\"" link)
+                      (setq ret nil))))
+            (t (nnhackernews--request-submit-text title body)))
+      ret)))
 
 (defun nnhackernews--browse-story (&rest _args)
   "What happens when I click on hackernews Subject."
