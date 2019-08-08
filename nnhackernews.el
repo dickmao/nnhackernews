@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Keywords: news
 ;; URL: https://github.com/dickmao/nnhackernews
-;; Package-Requires: ((emacs "25") (request "20190725"))
+;; Package-Requires: ((emacs "25") (request "20190725") (dash "20190401"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -44,6 +44,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'request)
+(require 'dash)
 
 (nnoo-declare nnhackernews)
 
@@ -51,6 +52,7 @@
 (defconst nnhackernews--group-show "show")
 (defconst nnhackernews--group-job "job")
 (defconst nnhackernews--group-news "news")
+(defconst nnhackernews--group-comments "comments")
 
 (defcustom nnhackernews-localhost "127.0.0.1"
   "Some users keep their browser in a separate domain.
@@ -324,8 +326,9 @@ If GROUP classification omitted, figure it out."
     (error "No current article"))
   (unless gnus-newsgroup-name
     (error "No current newgroup"))
-  (let* ((header (nnhackernews--get-header (cdr gnus-article-current)
-                                       (gnus-group-real-name (car gnus-article-current))))
+  (let* ((header (nnhackernews--get-header
+                  (cdr gnus-article-current)
+                  (gnus-group-real-name (car gnus-article-current))))
          (orig-score (format "%s" (plist-get header :score)))
          (new-score (if (zerop vote) orig-score
                       (concat orig-score " "
@@ -592,16 +595,40 @@ Originally written by Paul Issartel."
            :error (apply-partially #'nnhackernews--request-error caller)
            attributes)))
 
-(cl-defun nnhackernews--request-vote-success (&key data &allow-other-keys)
-  "Return t if seeming success."
-  data)
+(defsubst nnhackernews--domify (html)
+  "Parse HTML into dom."
+  (with-temp-buffer
+    (insert html)
+    (libxml-parse-html-region (point-min) (point-max))))
+
+(cl-defun nnhackernews--request-vote-success (&key data response &allow-other-keys)
+  "If necessary, login first, then return plist of :fnid and :fnop."
+  (let* ((dom (nnhackernews--domify data))
+         (form (alist-get 'form (alist-get 'body dom)))
+         (login-p (string= "vote" (alist-get 'action (car form))))
+         hidden)
+    (when login-p
+      (-tree-map-nodes
+       (lambda (x)
+         (and (listp x)
+              (eq (car x) 'input)
+              (string= "hidden" (alist-get 'type (cl-second x)))))
+       (lambda (x)
+         (!cons (alist-get 'value (cl-second x)) hidden)
+         (!cons (intern (concat ":" (alist-get 'name (cl-second x)))) hidden))
+       form)
+      (setq dom (nnhackernews--domify
+                 (nnhackernews--request-form (request-response-url response) hidden))))))
 
 (defun nnhackernews--request-vote (id _vote)
-  "Tally VOTE for ID.  Fixme need to get the auth field."
+  "Tally for ID the VOTE."
   (let (result)
     (nnhackernews--request
      "nnhackernews--request-vote"
-     (format "https://news.ycombinator.com/item/id=%s" id)
+     (format "https://news.ycombinator.com/vote?%s"
+             (url-build-query-string
+              `((id ,id) (how "up") (goto ,(format "item?id=%s" id)))))
+     :backend 'curl
      :success (nnhackernews--callback result #'nnhackernews--request-vote-success))
     result))
 
@@ -639,19 +666,34 @@ Originally written by Paul Issartel."
   (gnus-message 3 "%s %s: http status %s, %s" caller symbol-status response-status
                 (error-message-string error-thrown)))
 
-(defun nnhackernews--request-submit-link (_title _link)
-  "Submit TITLE with LINK."
+(defun nnhackernews--request-submit-link (title link hidden)
+  "Submit TITLE with LINK and HIDDEN."
   (nnhackernews--enforce-curl)
   (let (result)
     (nnhackernews--request
      "nnhackernews--request-submit-link"
      "https://news.ycombinator.com/submit"
-     :backend 'curl)
+     :backend 'curl
+     :data (append (cl-loop for (k v) on hidden by (function cddr)
+                            collect (cons (cl-subseq (symbol-name k) 1) v))
+                   `(("title" . ,title)
+                     ("url" . ,link)))
+     :success (nnhackernews--callback result))
     result))
 
-(defun nnhackernews--request-submit-text (_title _text)
-  "Submit TITLE with TEXT."
-)
+(defun nnhackernews--request-submit-text (text hidden)
+  "Submit TEXT and HIDDEN."
+  (nnhackernews--enforce-curl)
+  (let (result)
+    (nnhackernews--request
+     "nnhackernews--request-submit-text"
+     "https://news.ycombinator.com/submit"
+     :backend 'curl
+     :data (append (cl-loop for (k v) on hidden by (function cddr)
+                            collect (cons (cl-subseq (symbol-name k) 1) v))
+                   `(("text" . ,text)))
+     :success (nnhackernews--callback result))
+    result))
 
 (defun nnhackernews--request-item (id)
   "Retrieve ID as a property list."
@@ -670,6 +712,8 @@ Originally written by Paul Issartel."
       (setq plst (plist-put plst :id (number-to-string id)))
       (when-let (parent (plist-get plst :parent))
         (setq plst (plist-put plst :parent (number-to-string parent))))
+      (unless (plist-get plst :score)
+        (setq plst (plist-put plst :score 0)))
       plst)))
 
 (defun nnhackernews--select-items (start-item max-item &optional static-newstories)
@@ -864,50 +908,57 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
     (when (string-prefix-p magic string)
       (message "%s: %s" server (substring string (length magic))))))
 
-(defconst nnhackernews--fnid "name\\s-*=\\s-*\"?fnid\"?\\s-+value\\s-*=\\s-*\"?[^\"]+\"?")
-(defconst nnhackernews--fnop "name\\s-*=\\s-*\"?fnop\"?\\s-+value\\s-*=\\s-*\"?[^\"]+\"?")
-
-(defun nnhackernews--login-page (goto)
-  "Store a cookie from `https://news.ycombinator.com/login', then GOTO."
+(defun nnhackernews--request-form (url &optional hidden)
+  "Store a cookie from URL with HIDDEN plist."
   (let* (result
+         (auth-source-do-cache nil)
          (auth-source-creation-prompts '((user . "news.ycombinator.com user: ")
                                          (secret . "Password for %u: ")))
          (found (car (auth-source-search :max 1 :host "news.ycombinator.com" :require
                                          '(:user :secret) :create t))))
     (nnhackernews--request
-     "nnhackernews--login-page"
-     "https://news.ycombinator.com/login"
+     "nnhackernews--request-form"
+     url
      :backend 'curl
-     :data `(("acct" . ,(plist-get found :user))
-             ("pw" . ,(plist-get found :secret))
-             ("goto" . ,goto))
+     :data (append
+            (cl-loop for (k v) on hidden by (function cddr)
+                     collect (cons (cl-subseq (symbol-name k) 1) v))
+            `(("acct" . ,(plist-get found :user))
+              ("pw" . ,(let ((secret (plist-get found :secret)))
+                         (if (functionp secret)
+                             (funcall secret)
+                           secret)))))
      :success (nnhackernews--callback result))
     result))
 
-(defsubst nnhackernews--domify (html)
-  "Parse HTML into dom."
-  (with-temp-buffer
-    (insert html)
-    (libxml-parse-html-region (point-min) (point-max))))
-
-(cl-defun nnhackernews--submit-page-success (&key data &allow-other-keys)
+(cl-defun nnhackernews--request-submit-success (&key data response &allow-other-keys)
   "If necessary, login first, then return plist of :fnid and :fnop."
   (let* ((dom (nnhackernews--domify data))
          (form (car (alist-get 'form (alist-get 'body dom))))
          (login-p (string= "submit" (alist-get 'action form))))
     (when login-p
-      )
-      
-    ))
+      (setq dom (nnhackernews--domify
+                 (nnhackernews--request-form (request-response-url response)))))
+    (let (hidden)
+      (-tree-map-nodes
+       (lambda (x)
+         (and (listp x)
+              (eq (car x) 'input)
+              (string= "hidden" (alist-get 'type (cl-second x)))))
+       (lambda (x)
+         (!cons (alist-get 'value (cl-second x)) hidden)
+         (!cons (intern (concat ":" (alist-get 'name (cl-second x)))) hidden))
+       dom)
+      hidden)))
 
-(defun nnhackernews--submit-page ()
+(defun nnhackernews--request-submit ()
   "Get the hidden fields FNID and FNOP from `https://news.ycombinator.com/submit'."
   (let (result)
     (nnhackernews--request
-     "nnhackernews--submit-page"
+     "nnhackernews--request-submit"
      "https://news.ycombinator.com/submit"
      :backend 'curl
-     :success (nnhackernews--callback result #'nnhackernews--submit-page-success))
+     :success (nnhackernews--callback result #'nnhackernews--request-submit-success))
     result))
 
 (defsubst nnhackernews--extract-name (from)
@@ -922,7 +973,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
 ;; nnhackernews-request-post
 (deffoo nnhackernews-request-post (&optional server)
   (nnhackernews--normalize-server)
-  (when-let ((remote-fields (nnhackernews--submit-page)))
+  (when-let ((hidden (nnhackernews--request-submit)))
     (let* ((ret t)
            (title (or (message-fetch-field "Subject") (error "No Subject field")))
            (link (message-fetch-field "Link"))
@@ -949,10 +1000,10 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
             (link (let* ((parsed-url (url-generic-parse-url link))
                          (host (url-host parsed-url)))
                     (if (and (stringp host) (not (zerop (length host))))
-                        (nnhackernews--request-submit-link title link)
+                        (nnhackernews--request-submit-link title link hidden)
                       (error "nnhackernews-request-post: invalid url \"%s\"" link)
                       (setq ret nil))))
-            (t (nnhackernews--request-submit-text title body)))
+            (t (nnhackernews--request-submit-text body hidden)))
       ret)))
 
 (defun nnhackernews--browse-story (&rest _args)
