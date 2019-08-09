@@ -1168,7 +1168,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
    (cond ((nnhackernews--gate)
           (condition-case err
               (apply f args)
-            (error (gnus-message 5 "url-http-generic-filter: %s"
+            (error (gnus-message 7 "url-http-generic-filter: %s"
                                  (error-message-string err)))))
          (t (apply f args)))))
 
