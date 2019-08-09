@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Keywords: news
 ;; URL: https://github.com/dickmao/nnhackernews
-;; Package-Requires: ((emacs "25") (request "20190725") (dash "20190401"))
+;; Package-Requires: ((emacs "25") (request "20190725") (dash "20190401") (anaphora "20180618"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -45,14 +45,21 @@
 (require 'subr-x)
 (require 'request)
 (require 'dash)
+(require 'anaphora)
 
 (nnoo-declare nnhackernews)
 
 (defconst nnhackernews--group-ask "ask")
 (defconst nnhackernews--group-show "show")
 (defconst nnhackernews--group-job "job")
-(defconst nnhackernews--group-news "news")
+(defconst nnhackernews--group-stories "news")
 (defconst nnhackernews--group-comments "comments")
+
+(defcustom nnhackernews-render-story t
+  "If non-nil, follow link upon `gnus-summary-select-article'.
+
+Otherwise, just display link."
+  :group 'nnreddit)
 
 (defcustom nnhackernews-localhost "127.0.0.1"
   "Some users keep their browser in a separate domain.
@@ -191,35 +198,6 @@ Normalize it to \"nnhackernews-default\"."
     (unless (string= server canonical)
       (error "nnhackernews--normalize-server: multiple servers unsupported!"))))
 
-(defmacro nnhackernews-aif (test-form then-form &rest else-forms)
-  "Anaphoric if TEST-FORM THEN-FORM ELSE-FORMS.  Adapted from `e2wm:aif'."
-  (declare (debug (form form &rest form)))
-  `(let ((it ,test-form))
-     (if it ,then-form ,@else-forms)))
-(put 'nnhackernews-aif 'lisp-indent-function 2)
-
-(defmacro nnhackernews-aand (test &rest rest)
-  "Anaphoric conjunction of TEST and REST.  Adapted from `e2wm:aand'."
-  (declare (debug (form &rest form)))
-  `(let ((it ,test))
-     (if it ,(if rest (macroexpand-all `(nnhackernews-aand ,@rest)) 'it))))
-
-(defmacro nnhackernews-and-let* (bindings &rest form)
-  "Gauche's `and-let*'.  Each of BINDINGS must resolve to t before evaluating FORM."
-  (declare (debug ((&rest &or symbolp (form) (gate symbolp &optional form))
-                   body))
-           ;; See: (info "(elisp) Specification List")
-           (indent 1))
-  (if (null bindings)
-      `(progn ,@form)
-    (let* ((head (car bindings))
-           (tail (cdr bindings))
-           (rest (macroexpand-all `(nnhackernews-and-let* ,tail ,@form))))
-      (cond
-       ((symbolp head) `(if ,head ,rest))
-       ((= (length head) 1) `(if ,(car head) ,rest))
-       (t `(let (,head) (if ,(car head) ,rest)))))))
-
 (defvar nnhackernews-location-hashtb (gnus-make-hashtable)
   "Id -> ( group . index ).")
 
@@ -286,10 +264,11 @@ If NOQUERY, return nil and avoid querying if not extant."
          (title (or (plist-get root-plst :title) ""))
          (type (or (plist-get root-plst :type) "")))
     ;; string-match-p like all elisp searching is case-insensitive
-    (cond ((string-match-p "^Ask HN" title) nnhackernews--group-ask)
-          ((string-match-p "^Show HN" title) nnhackernews--group-show)
-          ((string= type "job") nnhackernews--group-job)
-          (t nnhackernews--group-news))))
+    (cond ((string= type "job") nnhackernews--group-job)
+          ((string-match-p "^\\(Launch\\|Show\\) HN" title) nnhackernews--group-show)
+          ((string-match-p "^\\(Ask\\|Tell\\) HN" title) nnhackernews--group-ask)
+          ((string= "comment" (plist-get header :type)) nnhackernews--group-comments)
+          (t nnhackernews--group-stories))))
 
 (defsubst nnhackernews--who-am-i ()
   "Get my Hacker News username."
@@ -395,8 +374,8 @@ If GROUP classification omitted, figure it out."
     (insert body)
     (mm-url-decode-entities)
     (cl-loop initially (goto-char (point-min))
-             until (and (null (re-search-forward "\\(^>\\(.*?\\)\\)<p>" nil t))
-                        (null (re-search-forward "\\(<p>\\s-*>\\(.*?\\)\\)<p>" nil t)))
+             until (and (null (re-search-forward "\\(^>\\( .*?\\)\\)<p>" nil t))
+                        (null (re-search-forward "\\(<p>\\s-*>\\( .*?\\)\\)<p>" nil t)))
              do (let* ((start (match-beginning 1))
                        (end (match-end 1))
                        (matched (match-string 2)))
@@ -505,12 +484,12 @@ Originally written by Paul Issartel."
                              end
                              finally return (or cand 0))))
                  (updated-seen-index (- num-headers
-                                        (nnhackernews-aif
+                                        (aif
                                             (seq-position (reverse headers) nil
                                                           (lambda (plst _e)
                                                             (not (plist-get plst :title))))
                                             it -1)))
-                 (updated-seen-id (nnhackernews-aif (nth (1- updated-seen-index) headers)
+                 (updated-seen-id (aif (nth (1- updated-seen-index) headers)
                                       (plist-get it :id) nil))
                  (delta (if newsrc-seen-index
                             (max 0 (- newsrc-seen-index newsrc-seen-index-now))
@@ -649,14 +628,6 @@ Originally written by Paul Issartel."
   (unless (executable-find "curl")
     (error "nnhackernews--enforce-curl: the 'curl' program was not found")))
 
-(cl-defun nnhackernews--request-submit-error (caller
-                                              &key response
-                                              &allow-other-keys
-                                              &aux (response-status
-                                                    (request-response-status-code response)))
-  "Refer to CALLER when reporting a submit error."
-  (gnus-message 3 "%s: http status %s" caller response-status))
-
 (cl-defun nnhackernews--request-error (caller
                                        &key response symbol-status error-thrown
                                        &allow-other-keys
@@ -761,9 +732,9 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
            (counts (gnus-make-hashtable))
            (items (nnhackernews--select-items start-item max-item static-newstories)))
       (dolist (item items)
-        (nnhackernews-and-let* ((plst (nnhackernews--request-item item))
-                                ((not (plist-get plst :deleted)))
-                                (type (plist-get plst :type)))
+        (-when-let* ((plst (nnhackernews--request-item item))
+                     (not-deleted (not (plist-get plst :deleted)))
+                     (type (plist-get plst :type)))
           (nnhackernews-add-entry nnhackernews-refs-hashtb plst :parent)
           (nnhackernews-add-entry nnhackernews-authors-hashtb plst :by)
           (nnhackernews--replace-hash type (lambda (x) (1+ (or x 0))) counts)
@@ -833,8 +804,9 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
 
 (deffoo nnhackernews-request-article (article-number &optional group server buffer)
   (nnhackernews--normalize-server)
+  (unless buffer (setq buffer nntp-server-buffer))
   (nnhackernews--with-group group
-    (with-current-buffer (or buffer nntp-server-buffer)
+    (with-current-buffer buffer
       (erase-buffer)
       (let* ((header (nnhackernews--get-header article-number group))
              (mail-header (nnhackernews--make-header article-number))
@@ -850,17 +822,23 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
            "Message-ID: " (mail-header-id mail-header) "\n"
            "References: " (mail-header-references mail-header) "\n"
            "Content-Type: text/html; charset=utf-8" "\n"
-           (format "Archived-at: %s\n" permalink)
-           ""
-           (if score (format "Score: %s\n" score) "")
+           "Archived-at: " permalink "\n"
+           "Score: " score "\n"
            "\n")
-          (nnhackernews-and-let*
-           ((parent (plist-get header :parent))
-            (parent-author (or (nnhackernews--gethash parent nnhackernews-authors-hashtb)
-                               "Someone"))
-            (parent-body (nnhackernews--get-body (nnhackernews-find-header parent) server)))
-           (insert (nnhackernews--citation-wrap parent-author parent-body)))
-          (insert (nnhackernews--massage body))
+          (-when-let*
+              ((parent (plist-get header :parent))
+               (parent-author
+                (or (nnhackernews--gethash parent nnhackernews-authors-hashtb)
+                    "Someone"))
+               (parent-body (nnhackernews--get-body
+                             (nnhackernews-find-header parent) server)))
+            (insert (nnhackernews--citation-wrap parent-author parent-body)))
+          (aif (and nnhackernews-render-story (plist-get header :url))
+              (nnhackernews--request "nnhackernews-request-article" it
+                                     :success (cl-function
+                                               (lambda (&key data &allow-other-keys)
+                                                 (insert data))))
+            (insert (nnhackernews--massage body)))
           (cons group article-number))))))
 
 (deffoo nnhackernews-retrieve-headers (article-numbers &optional group server _fetch-old)
@@ -889,7 +867,8 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
           `(,nnhackernews--group-ask
             ,nnhackernews--group-show
             ,nnhackernews--group-job
-            ,nnhackernews--group-news)))
+            ,nnhackernews--group-stories
+            ,nnhackernews--group-comments)))
   t)
 
 (defun nnhackernews-sentinel (process event)
@@ -1153,16 +1132,16 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
 
 ;; disallow caching as firebase might change the article numbering?
 (setq gnus-uncacheable-groups
-      (nnhackernews-aif gnus-uncacheable-groups
+      (aif gnus-uncacheable-groups
           (format "\\(%s\\)\\|\\(^nnhackernews\\)" it)
         "^nnhackernews"))
 
-(push '((and (eq (car gnus-current-select-method) 'nnhackernews)
-             (eq mark gnus-unread-mark)
-             (not (string-match-p
-                   "^Re: " (gnus-summary-article-subject))))
-        . gnus-summary-high-unread)
-      gnus-summary-highlight)
+;; (push '((and (eq (car gnus-current-select-method) 'nnhackernews)
+;;              (eq mark gnus-unread-mark)
+;;              (not (string-match-p
+;;                    "^Re: " (gnus-summary-article-subject))))
+;;         . gnus-summary-high-unread)
+;;       gnus-summary-highlight)
 
 (provide 'nnhackernews)
 
