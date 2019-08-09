@@ -1172,6 +1172,17 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                                  (error-message-string err)))))
          (t (apply f args)))))
 
+;; the let'ing to nil of `gnus-summary-display-article-function'
+;; in `gnus-summary-select-article' dates back to antiquity.
+(add-function
+ :around (symbol-function 'gnus-summary-display-article)
+ (lambda (f &rest args)
+   (cond ((nnhackernews--gate)
+          (let ((gnus-summary-display-article-function
+                 (symbol-function 'nnhackernews--display-article)))
+            (apply f args)))
+         (t (apply f args)))))
+
 ;; disallow caching as firebase might change the article numbering?
 (setq gnus-uncacheable-groups
       (aif gnus-uncacheable-groups
