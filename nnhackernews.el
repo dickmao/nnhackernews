@@ -60,7 +60,7 @@
   "If non-nil, follow link upon `gnus-summary-select-article'.
 
 Otherwise, just display link."
-  :group 'nnreddit)
+  :group 'nnhackernews)
 
 (defcustom nnhackernews-localhost "127.0.0.1"
   "Some users keep their browser in a separate domain.
@@ -1015,8 +1015,9 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
 
 (defsubst nnhackernews--fallback-link ()
   "Cannot render story."
-  (let* ((header (nnhackernews--get-header (cdr gnus-article-current)
-                                           (car gnus-article-current)))
+  (let* ((header (nnhackernews--get-header
+                  (cdr gnus-article-current)
+                  (gnus-group-real-name (car gnus-article-current))))
          (body (nnhackernews--massage (nnhackernews--get-body header))))
     (with-current-buffer gnus-original-article-buffer
       (article-goto-body)
@@ -1030,7 +1031,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
       (error
        (if nnhackernews-render-story
            (progn
-             (gnus-message 5 "nnhackernews--display-article: %s (falling back...)"
+             (gnus-message 7 "nnhackernews--display-article: '%s' (falling back...)"
                            (error-message-string err))
              (nnhackernews--fallback-link)
              (gnus-article-prepare article all-headers))
