@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Keywords: news
 ;; URL: https://github.com/dickmao/nnhackernews
-;; Package-Requires: ((emacs "25") (request "20190725") (dash "20190401") (anaphora "20180618"))
+;; Package-Requires: ((emacs "25") (request "20190730") (dash "20190401") (anaphora "20180618"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -46,6 +46,7 @@
 (require 'request)
 (require 'dash)
 (require 'anaphora)
+(require 'url-http)
 
 (nnoo-declare nnhackernews)
 
@@ -366,7 +367,7 @@ If GROUP classification omitted, figure it out."
   (nnhackernews--normalize-server)
   (if-let ((url (plist-get header :url)))
       (format "<div><p><a href=\"%s\">%s</a></div>" url url)
-    (plist-get header :text)))
+    (or (plist-get header :text) "")))
 
 (defun nnhackernews--massage (body)
   "Precede each quoted line of BODY broken by `shr-fill-line' with '>'."
@@ -812,7 +813,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
              (mail-header (nnhackernews--make-header article-number))
              (score (cdr (assq 'X-Hackernews-Score (mail-header-extra mail-header))))
              (permalink (cdr (assq 'X-Hackernews-Permalink (mail-header-extra mail-header))))
-             (body (nnhackernews--get-body header server)))
+             (body (nnhackernews--massage (nnhackernews--get-body header server))))
         (when body
           (insert
            "Newsgroups: " group "\n"
@@ -834,11 +835,15 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                              (nnhackernews-find-header parent) server)))
             (insert (nnhackernews--citation-wrap parent-author parent-body)))
           (aif (and nnhackernews-render-story (plist-get header :url))
-              (nnhackernews--request "nnhackernews-request-article" it
-                                     :success (cl-function
-                                               (lambda (&key data &allow-other-keys)
-                                                 (insert data))))
-            (insert (nnhackernews--massage body)))
+              (condition-case err
+                  (nnhackernews--request "nnhackernews-request-article" it
+                                         :success (cl-function
+                                                   (lambda (&key data &allow-other-keys)
+                                                     (insert data))))
+                (error (gnus-message 5 "nnhackernews-request-article: %s"
+                                     (error-message-string err))
+                       (insert body)))
+            (insert body))
           (cons group article-number))))))
 
 (deffoo nnhackernews-retrieve-headers (article-numbers &optional group server _fetch-old)
@@ -1008,6 +1013,30 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
           result)
     result))
 
+(defsubst nnhackernews--fallback-link ()
+  "Cannot render story."
+  (let* ((header (nnhackernews--get-header (cdr gnus-article-current)
+                                           (car gnus-article-current)))
+         (body (nnhackernews--massage (nnhackernews--get-body header))))
+    (with-current-buffer gnus-original-article-buffer
+      (article-goto-body)
+      (delete-region (point) (point-max))
+      (insert body))))
+
+(defalias 'nnhackernews--display-article
+  (lambda (article &optional all-headers _header)
+    (condition-case err
+        (gnus-article-prepare article all-headers)
+      (error
+       (if nnhackernews-render-story
+           (progn
+             (gnus-message 5 "nnhackernews--display-article: %s (falling back...)"
+                           (error-message-string err))
+             (nnhackernews--fallback-link)
+             (gnus-article-prepare article all-headers))
+         (error (error-message-string err))))))
+  "In case of shr failures, extract original link from a planted comment.")
+
 (add-to-list 'gnus-parameters `("^nnhackernews"
                                 (gnus-summary-make-false-root 'adopt)
                                 (gnus-cite-hide-absolute 5)
@@ -1015,6 +1044,8 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                                 (gnus-cited-lines-visible '(2 . 2))
                                 (gnus-auto-extend-newsgroup nil)
                                 (gnus-add-timestamp-to-message t)
+                                (gnus-summary-display-article-function
+                                 (quote ,(symbol-function 'nnhackernews--display-article)))
                                 (gnus-header-button-alist
                                  (quote ,(nnhackernews--header-button-alist)))
                                 (gnus-visible-headers ,(concat gnus-visible-headers "\\|^Score:"))))
@@ -1129,6 +1160,16 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
            (remove-function (symbol-function 'message-fetch-field) concat-func))
        (error (remove-function (symbol-function 'message-fetch-field) concat-func)
               (error (error-message-string err)))))))
+
+(add-function
+ :around (symbol-function 'url-http-generic-filter)
+ (lambda (f &rest args)
+   (cond ((nnhackernews--gate)
+          (condition-case err
+              (apply f args)
+            (error (gnus-message 5 "url-http-generic-filter: %s"
+                                 (error-message-string err)))))
+         (t (apply f args)))))
 
 ;; disallow caching as firebase might change the article numbering?
 (setq gnus-uncacheable-groups
