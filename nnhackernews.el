@@ -261,14 +261,13 @@ If NOQUERY, return nil and avoid querying if not extant."
 
 (defun nnhackernews--group-for (header)
   "Classify HEADER as one of ask, show, or news based on title."
-  (let* ((root-plst (nnhackernews--retrieve-root header))
-         (title (or (plist-get root-plst :title) ""))
-         (type (or (plist-get root-plst :type) "")))
+  (let* ((title (or (plist-get header :title) ""))
+         (type (or (plist-get header :type) "")))
     ;; string-match-p like all elisp searching is case-insensitive
     (cond ((string= type "job") nnhackernews--group-job)
+          ((string= type "comment") nnhackernews--group-comments)
           ((string-match-p "^\\(Launch\\|Show\\) HN" title) nnhackernews--group-show)
           ((string-match-p "^\\(Ask\\|Tell\\) HN" title) nnhackernews--group-ask)
-          ((string= "comment" (plist-get header :type)) nnhackernews--group-comments)
           (t nnhackernews--group-stories))))
 
 (defsubst nnhackernews--who-am-i ()
@@ -1036,7 +1035,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
              (nnhackernews--fallback-link)
              (gnus-article-prepare article all-headers))
          (error (error-message-string err))))))
-  "In case of shr failures, extract original link from a planted comment.")
+  "In case of shr failures, dump original link.")
 
 (add-to-list 'gnus-parameters `("^nnhackernews"
                                 (gnus-summary-make-false-root 'adopt)
