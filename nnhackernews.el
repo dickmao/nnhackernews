@@ -39,6 +39,7 @@
 (require 'gnus-srvr)
 (require 'gnus-cache)
 (require 'gnus-bcklg)
+(require 'gnus-score)
 (require 'mm-url)
 (require 'cl-lib)
 (require 'json)
@@ -1119,8 +1120,15 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
 (let ((custom-defaults
        ;; For now, revert any user overrides that I can't predict.
        (mapcar (lambda (x)
-                 (let ((var (cl-first x)))
-                   (cons var (get var 'standard-value))))
+                 (let* ((var (cl-first x))
+                        (sv (get var 'standard-value)))
+                   (when (eq var 'gnus-default-adaptive-score-alist)
+                     (setq sv (list `(quote
+                                      ,(mapcar (lambda (entry)
+                                                 (cons (car entry)
+                                                       (assq-delete-all 'from (cdr entry))))
+                                               (eval (car sv)))))))
+                   (cons var sv)))
                (seq-filter (lambda (x) (eq 'custom-variable (cl-second x)))
                            (append (get 'gnus-score-adapt 'custom-group)
                                    (get 'gnus-score-default 'custom-group))))))
@@ -1273,6 +1281,33 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
             (error (gnus-message 7 "url-http-generic-filter: %s"
                                  (error-message-string err)))))
          (t (apply f args)))))
+
+(defmacro nnhackernews-print-out (form)
+  `(let (eval-expression-print-length eval-expression-print-level)
+     (prin1 ,form)))
+
+;; Make the scoring entries Markovian
+(add-function
+ :around (symbol-function 'gnus-summary-score-entry)
+ (lambda (f header match &rest args)
+   (cond ((nnhackernews--gate)
+          (let* ((new-touched
+                  (let ((gnus-score-alist (copy-alist '((touched nil)))))
+                    (cons (apply f header match args)
+                          (cl-some #'identity (gnus-score-get 'touched)))))
+                 (new (car new-touched))
+                 (touched (cdr new-touched)))
+            (when (and touched new)
+              (-if-let* ((old (gnus-score-get header))
+                         (elem (assoc match old))
+                         (match-type (eq (nth 3 elem) (nth 3 new)))
+                         (match-date (or (and (numberp (nth 2 elem)) (numberp (nth 2 new)))
+                                         (and (not (nth 2 elem)) (not (nth 2 new))))))
+                  (setcar (cdr elem) (nth 1 new))
+                (gnus-score-set header (cons new old) nil t))
+              (gnus-score-set 'touched '(t)))
+            new))
+         (t (apply f header match args)))))
 
 ;; the let'ing to nil of `gnus-summary-display-article-function'
 ;; in `gnus-summary-select-article' dates back to antiquity.
