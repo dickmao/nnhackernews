@@ -61,6 +61,7 @@
   "If non-nil, follow link upon `gnus-summary-select-article'.
 
 Otherwise, just display link."
+  :type 'boolean
   :group 'nnhackernews)
 
 (defcustom nnhackernews-localhost "127.0.0.1"
@@ -685,7 +686,7 @@ Originally written by Paul Issartel."
   "Retrieve ID as a property list."
   (push id nnhackernews--debug-request-items)
   (let ((utf-decoder (lambda (x)
-                       (decode-coding-string (string-make-unibyte x) 'utf-8)))
+                       (decode-coding-string x 'utf-8)))
         plst)
     (add-function :filter-return (symbol-function 'json-read-string) utf-decoder)
     (nnhackernews--request
@@ -1281,10 +1282,6 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
             (error (gnus-message 7 "url-http-generic-filter: %s"
                                  (error-message-string err)))))
          (t (apply f args)))))
-
-(defmacro nnhackernews-print-out (form)
-  `(let (eval-expression-print-length eval-expression-print-level)
-     (prin1 ,form)))
 
 ;; Make the scoring entries Markovian
 (add-function
