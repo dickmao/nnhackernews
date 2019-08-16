@@ -1005,12 +1005,13 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
 
 (defun nnhackernews--browse-story (&rest _args)
   "What happens when I click on hackernews Subject."
-  (when gnus-article-current
-    (browse-url (plist-get (nnhackernews--retrieve-root
-                            (nnhackernews--get-header
-                             (cdr gnus-article-current)
-                             (gnus-group-real-name (car gnus-article-current))))
-                           :url))))
+  (-when-let* ((group-article gnus-article-current)
+               (url (plist-get (nnhackernews--retrieve-root
+                                (nnhackernews--get-header
+                                 (cdr group-article)
+                                 (gnus-group-real-name (car group-article))))
+                           :url)))
+    (browse-url url)))
 
 (defun nnhackernews--header-button-alist ()
   "Construct a buffer-local `gnus-header-button-alist' for nnhackernews."
