@@ -7,6 +7,7 @@ addons:
     packages:
     - gnutls-bin
     - sharutils
+    - libxml2-dev
 
 cache:
   directories:
