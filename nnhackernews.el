@@ -594,7 +594,8 @@ Originally written by Paul Issartel."
   "Parse HTML into dom."
   (with-temp-buffer
     (insert html)
-    (libxml-parse-html-region (point-min) (point-max))))
+    (when (fboundp 'libxml-parse-html-region)
+      (libxml-parse-html-region (point-min) (point-max)))))
 
 (cl-defun nnhackernews--request-vote-success (&key data response &allow-other-keys)
   "If necessary, login first, then return plist of :fnid and :fnop."
