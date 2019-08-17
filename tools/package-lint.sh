@@ -13,7 +13,7 @@ INIT_PACKAGE_EL="(progn
 
 "$EMACS" -Q -batch \
          --eval "$INIT_PACKAGE_EL" \
-         --eval "(unless (package-installed-p (quote quelpa)) (package-refresh-contents) (package-install (quote quelpa)))"
+         --eval "(unless (package-installed-p (quote quelpa)) (package-refresh-contents) (package-install (quote quelpa)))" \
          --eval "(unless (package-installed-p (quote package-lint)) (quelpa (quote (package-lint :fetcher github :repo \"dickmao/package-lint\" :branch \"datetime\"))))"
 
 # Byte compile, failing on byte compiler errors, or on warnings unless ignored
