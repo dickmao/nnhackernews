@@ -21,12 +21,8 @@
  '(gnus-interactive-exit (quote quiet)))
 
 (require 'nnhackernews)
-(require 'cl-lib)
 (require 'ert)
 (require 'message)
-
-(with-eval-after-load "python"
-  (setq python-indent-guess-indent-offset-verbose nil))
 
 (defun nnhackernews-test-wait-for (predicate &optional predargs ms interval continue)
   "Wait until PREDICATE function returns non-`nil'.
@@ -40,6 +36,10 @@
                          do (sleep-for 0 int))
                 continue)
       (error "Timeout: %s" predicate))))
+
+(defun nnhackernews-test-recording-file (scenario)
+  (concat (file-name-as-directory (directory-file-name load-file-name))
+          "recording." scenario))
 
 ;; if yes-or-no-p isn't specially overridden, make it always "yes"
 (let ((original-yes-or-no-p (symbol-function 'yes-or-no-p)))

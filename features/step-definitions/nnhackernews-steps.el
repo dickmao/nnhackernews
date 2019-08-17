@@ -1,7 +1,3 @@
-(When "I kill all rpc processes$"
-      (lambda ()
-        (nnhackernews-request-close)))
-
 (When "I hide tokens$"
       (lambda ()
         (setq nnhackernews--python-module-extra-args '("--token-file" "/dev/null"))))
@@ -9,10 +5,6 @@
 (When "I unhide tokens$"
       (lambda ()
         (setq nnhackernews--python-module-extra-args nil)))
-
-(When "^rpc \"\\(.*\\)\" returns \"\\(.*\\)\"$"
-      (lambda (command result)
-        (should (string= result (nnhackernews-rpc-call nil nil command)))))
 
 (When "^I should be in buffer like \"\\(.+\\)\"$"
       (lambda (prefix)
@@ -57,18 +49,6 @@
             (progn (switch-to-buffer it)
                    (And "I press \"q\"")
                    (switch-to-buffer "*scratch*")))))
-
-(When "^begin recording \"\\(.+\\)\"$"
-      (lambda (cassette)
-        (should (nnhackernews-rpc-call nil nil "recording_begin" cassette))))
-
-(When "^end recording \"\\(.+\\)\"$"
-      (lambda (cassette)
-        (should (nnhackernews-rpc-call nil nil "recording_end" cassette))))
-
-(When "^end recordings$"
-      (lambda ()
-        (should (nnhackernews-rpc-call nil nil "recording_end"))))
 
 (When "^I open latest \"\\(.+\\)\"$"
       (lambda (relative-prefix)

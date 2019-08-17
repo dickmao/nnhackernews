@@ -264,7 +264,7 @@ If NOQUERY, return nil and avoid querying if not extant."
 (defun nnhackernews--group-for (header)
   "Classify HEADER as one of ask, show, or news based on title."
   (let* ((root-plst (nnhackernews--retrieve-root header))
-         (title (or (plist-get root-plst :title) ""))
+         (title (or (plist-get header :link_title) ""))
          (type (or (plist-get root-plst :type) "")))
     ;; string-match-p like all elisp searching is case-insensitive
     (cond ((string= type "job") nnhackernews--group-job)
