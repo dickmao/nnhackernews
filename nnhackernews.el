@@ -686,7 +686,11 @@ Originally written by Paul Issartel."
   "Retrieve ID as a property list."
   (push id nnhackernews--debug-request-items)
   (let ((utf-decoder (lambda (x)
-                       (decode-coding-string x 'utf-8)))
+                       (decode-coding-string (with-temp-buffer
+                                               (set-buffer-multibyte nil)
+                                               (insert x)
+                                               (buffer-string))
+                                             'utf-8)))
         plst)
     (add-function :filter-return (symbol-function 'json-read-string) utf-decoder)
     (nnhackernews--request
