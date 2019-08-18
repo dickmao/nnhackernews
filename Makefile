@@ -1,3 +1,4 @@
+EMACS ?= $(shell which emacs)
 SRC=$(shell cask files)
 PKBUILD=2.3
 ELCFILES = $(SRC:.el=.elc)
@@ -44,7 +45,7 @@ test-install:
 	cd tests/test-install/package-build-$(PKBUILD) ; make -s loaddefs
 	mkdir -p tests/test-install/recipes
 	cd tests/test-install/recipes ; curl -sfLOk https://raw.githubusercontent.com/melpa/melpa/master/recipes/nnhackernews || cp -f ../../../tools/recipe ./nnhackernews
-	! ( emacs -Q --batch -L tests/test-install/package-build-$(PKBUILD) \
+	! ( $(EMACS) -Q --batch -L tests/test-install/package-build-$(PKBUILD) \
 	--eval "(require 'package-build)" \
 	--eval "(require 'subr-x)" \
 	--eval "(package-initialize)" \
@@ -72,7 +73,7 @@ test: test-compile test-unit test-int
 .PHONY: test-int
 test-int:
 	rm -f tests/.newsrc.eld
-	cask exec ecukes --debug --reporter magnars
+	cask exec ecukes --reporter magnars --debug
 
 .PHONY: dist-clean
 dist-clean:
@@ -84,7 +85,7 @@ dist: dist-clean
 
 .PHONY: install
 install: test-compile dist
-	emacs -Q --batch --eval "(package-initialize)" \
+	$(EMACS) -Q --batch --eval "(package-initialize)" \
 	  --eval "(add-to-list 'package-archives '(\"melpa\" . \"http://melpa.org/packages/\"))" \
 	  --eval "(package-refresh-contents)" \
 	  --eval "(package-install-file (car (file-expand-wildcards \"dist/nnhackernews*.el\")))"

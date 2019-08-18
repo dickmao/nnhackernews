@@ -1,5 +1,4 @@
 ;;; -*- lexical-binding: t; coding: utf-8 -*-
-(require 'espuds)
 
 ;; (defsubst dir-up (x)
 ;;   "Replica of f-parent without using f.el.
@@ -13,6 +12,7 @@
 
 (add-to-list 'load-path (f-expand "lisp" (ecukes-project-path)))
 (add-to-list 'load-path (f-expand "tests" (ecukes-project-path)))
+(require 'espuds)
 (require 'nnhackernews-test)
 
 (defmacro if-demote (demote &rest forms)
@@ -54,14 +54,15 @@
  (add-function
   :before-until (symbol-function 'nnhackernews--request)
   (lambda (caller url &rest args)
-    (when (and (string= caller "nnhackernews--request-item")
-               (not scenario-recording-p))
-      (let* ((fun0 (plist-get args :success))
-             (id (progn (string-match "\\([0-9]+\\)\\.json" url)
-                        (match-string 1 url)))
-             (plst (or (car (gnus-score-get id scenario-recording-alist))
-                       (error "nnhackernews--request-item: could not playback %s" id))))
-        (funcall fun0 :data plst)))))
+    (unless scenario-recording-p
+      (cond ((string= caller "nnhackernews--request-item")
+             (let* ((fun0 (plist-get args :success))
+                    (id (progn (string-match "\\([0-9]+\\)\\.json" url)
+                               (match-string 1 url)))
+                    (plst (or (car (gnus-score-get id scenario-recording-alist))
+                              (error "nnhackernews--request-item: could not playback %s" id))))
+               (funcall fun0 :data plst)))
+            (t (error "Would query out for %s %s" caller url))))))
 
  (add-function
   :filter-args (symbol-function 'nnhackernews--incoming)
