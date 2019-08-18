@@ -5,7 +5,6 @@
 ;; licensed under GNU General Public License v3.0.
 
 (custom-set-variables
- '(gnus-before-startup-hook (quote (toggle-debug-on-error)))
  '(auto-revert-verbose nil)
  '(auto-revert-stop-on-user-input nil)
  '(gnus-read-active-file nil)

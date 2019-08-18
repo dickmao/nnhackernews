@@ -701,26 +701,25 @@ Originally written by Paul Issartel."
      :success (nnhackernews--callback plst))
     (remove-function (symbol-function 'json-read-string) utf-decoder)
     (when-let ((id (plist-get plst :id)))
-      (setq plst (plist-put plst :id (number-to-string id)))
-      (when-let (parent (plist-get plst :parent))
+      (when (numberp id)
+        (setq plst (plist-put plst :id (number-to-string id))))
+      (-when-let* ((parent (plist-get plst :parent))
+                   (is-number (numberp parent)))
         (setq plst (plist-put plst :parent (number-to-string parent))))
       (unless (plist-get plst :score)
         (setq plst (plist-put plst :score 0)))
       plst)))
 
-(defun nnhackernews--select-items (start-item max-item &optional static-newstories)
+(defun nnhackernews--select-items (start-item max-item all-stories)
   "Return a list of items to retrieve between START-ITEM and MAX-ITEM.
 
-STATIC-NEWSTORIES can be provided in lieu of querying out.
-
 Since we are constrained by `nnhackernews-max-items-per-scan', we prioritize
-stories and may throw away comments, etc."
+ALL-STORIES and may throw away comments, etc."
   (mapcar
    #'number-to-string
    (if (> (1+ (- max-item start-item)) nnhackernews-max-items-per-scan)
-       (let* ((stories (seq-take-while
-                        (lambda (x) (>= x start-item))
-                        (or static-newstories (nnhackernews--request-newstories))))
+       (let* ((stories (seq-take-while (lambda (x) (>= x start-item))
+                                       all-stories))
               (excess (- nnhackernews-max-items-per-scan (length stories))))
          (if (<= excess 0)
              (nreverse (cl-subseq stories 0 nnhackernews-max-items-per-scan))
@@ -748,10 +747,16 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
   (interactive)
   (setq nnhackernews--debug-request-items nil)
   (when-let ((max-item (or static-max-item (nnhackernews--request-max-item))))
-    (let* ((start-item (1+ (or nnhackernews--last-item
-                               (- max-item nnhackernews-max-items-per-scan))))
+    (let* ((stories (or static-newstories (nnhackernews--request-newstories)))
+           (earliest-story (nth (1- (min nnhackernews-max-items-per-scan
+                                         (length stories)))
+                                stories))
+           (start-item (if nnhackernews--last-item
+                           (1+ nnhackernews--last-item)
+                         (min earliest-story
+                              (- max-item nnhackernews-max-items-per-scan))))
            (counts (gnus-make-hashtable))
-           (items (nnhackernews--select-items start-item max-item static-newstories)))
+           (items (nnhackernews--select-items start-item max-item stories)))
       (dolist (item items)
         (-when-let* ((plst (nnhackernews--request-item item))
                      (not-deleted (not (plist-get plst :deleted)))
