@@ -55,6 +55,6 @@ From the summary buffer, ``/o`` redisplays articles already read.  ``x`` undispl
 
 ``S c`` cancels articles.
 
-Gnus beginners may find the interface bewildering.  In particular, subreddits with no unread articles do not display.  Use ``L`` to bring them out of hiding.
+Gnus beginners may find the interface bewildering.  In particular, groups with no unread articles do not display.  Use ``L`` to bring them out of hiding.
 
 .. _Getting started: http://melpa.org/#/getting-started

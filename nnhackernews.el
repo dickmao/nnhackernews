@@ -55,7 +55,6 @@
 (defconst nnhackernews--group-show "show")
 (defconst nnhackernews--group-job "job")
 (defconst nnhackernews--group-stories "news")
-(defconst nnhackernews--group-comments "comments")
 
 (defcustom nnhackernews-render-story t
   "If non-nil, follow link upon `gnus-summary-select-article'.
@@ -354,7 +353,7 @@ If GROUP classification omitted, figure it out."
   (declare (debug (form &rest form))
            (indent 1))
   `(let* ((group (or ,group (gnus-group-real-name gnus-newsgroup-name)))
-          (gnus-newsgroup-name (gnus-group-prefixed-name group "nnhackernews")))
+          (gnus-newsgroup-name (gnus-group-prefixed-name group "nnhackernews:")))
      ,@body))
 
 (defun nnhackernews--get-header (article-number &optional group)
@@ -421,8 +420,10 @@ Originally written by Paul Issartel."
 (defsubst nnhackernews--score-unread (group)
   "Avoid having to select the GROUP to make the unread number go down."
   (nnhackernews--with-group group
-    (let* ((group-full-name (gnus-group-full-name group "nnhackernews:"))
+   (let* ((group-full-name (gnus-group-full-name group "nnhackernews:"))
            (unread (gnus-group-unread group-full-name)))
+      (gnus-message 7 "nnhackernews--score-unread: %s unread %s"
+                    group unread)
       (when (and (numberp unread) (> unread 0))
         (save-excursion
           (ignore-errors
@@ -436,10 +437,10 @@ Originally written by Paul Issartel."
   (nnhackernews--normalize-server)
   (nnhackernews--with-group group
     (gnus-message 5 "nnhackernews-request-group-scan: scanning %s..." group)
-    (gnus-activate-group (gnus-group-full-name group '("nnhackernews" (or server ""))) t)
+    (gnus-activate-group (gnus-group-full-name group `("nnhackernews" ,(or server ""))) t)
     (gnus-message 5 "nnhackernews-request-group-scan: scanning %s...done" group)
-    (nnhackernews--score-unread group)
-    t))
+    (nnhackernews--score-unread group))
+  t)
 
 ;; gnus-group-select-group
 ;;   gnus-group-read-group
@@ -456,84 +457,20 @@ Originally written by Paul Issartel."
     (let* ((info
             (or info
                 (gnus-get-info gnus-newsgroup-name)
-                (list group
+                (list gnus-newsgroup-name
                       gnus-level-default-subscribed
                       nil nil
                       (gnus-method-simplify (gnus-group-method gnus-newsgroup-name)))))
-           (params (gnus-info-params info))
-           (newsrc-read-ranges (gnus-info-read info))
-           (newsrc-seen-cons (gnus-group-parameter-value params 'last-seen t))
-           (newsrc-seen-index (car newsrc-seen-cons))
-           (newsrc-seen-id (cdr newsrc-seen-cons))
            (headers (nnhackernews-get-headers group))
            (num-headers (length headers))
            (status (format "211 %d %d %d %s" num-headers 1 num-headers group)))
       (gnus-message 7 "nnhackernews-request-group: %s" status)
       (nnheader-insert "%s\n" status)
-
-      ;; remind myself how this works:
-      ;; old-praw (1 - 20=emkdjrx)
-      ;; read-ranges (1 - 10)                   (15 - 20)
-      ;; unread-ranges       (11, 12, 13, 14)
-      ;; new-praw    (12 13 14 15 16 17 18 19 20 - 100)
-      ;; 20=emkdjrx in old-praw is 9=emkdjrx in new-praw.  index shift is 20-9=+11
-      ;; new-unread-ranges   (0,  1,   2,  3)
-      ;; new-read-ranges                        (4 - 9)
-      (when (gnus-group-entry gnus-newsgroup-name)
-        ;; seen-indices are one-indexed !
-        (let* ((newsrc-seen-index-now
-                (if (or (not (stringp newsrc-seen-id))
-                        (zerop (string-to-number newsrc-seen-id)))
-                    1
-                  (cl-loop with marker-id = (string-to-number newsrc-seen-id)
-                           for plst in headers
-                           for i = 1 then (1+ i)
-                           for header-id = (string-to-number (plist-get plst :id))
-                           until (>= header-id marker-id)
-                           finally return
-                           (prog1 i
-                             (if (= header-id marker-id)
-                                 (gnus-message 7 "nnhackernews-request-group: exact=%s" i)
-                               (gnus-message
-                                4 (concat "nnhackernews-request-group: "
-                                          "%s not found (stopping at one-index %s/%s, "
-                                          "%s (one-after id is %s)")
-                                marker-id i num-headers header-id
-                                (plist-get (nth i headers) :id)))))))
-               (updated-seen-index num-headers)
-               (updated-seen-id (plist-get (nth (1- updated-seen-index) headers) :id))
-               (delta (if newsrc-seen-index
-                          (max 0 (- newsrc-seen-index newsrc-seen-index-now))
-                        0))
-               (newsrc-read-ranges-shifted
-                (cl-remove-if-not (lambda (e)
-                                    (cond ((numberp e) (> e 0))
-                                          (t (> (cdr e) 0))))
-                                  (mapcar (lambda (e)
-                                            (cond ((numberp e) (- e delta))
-                                                  (t `(,(max 1 (- (car e) delta)) .
-                                                       ,(- (cdr e) delta)))))
-                                          newsrc-read-ranges))))
-          (gnus-message 7 "nnhackernews-request-group: seen-id=%s          seen-index=%s -> %s"
-                        newsrc-seen-id newsrc-seen-index newsrc-seen-index-now)
-          (gnus-message 7 "nnhackernews-request-group: seen-id-to-be=%s seen-index-to-be=%s delta=%d"
-                        updated-seen-id updated-seen-index delta)
-          (gnus-message 7 "nnhackernews-request-group: read-ranges=%s shifted-read-ranges=%s"
-                        newsrc-read-ranges newsrc-read-ranges-shifted)
-          (gnus-info-set-read info newsrc-read-ranges-shifted)
-          (gnus-info-set-marks
-           info
-           (append (assq-delete-all 'seen (gnus-info-marks info))
-                   (list `(seen (1 . ,num-headers)))))
-          (when updated-seen-id
-            (while (assq 'last-seen params)
-              (gnus-alist-pull 'last-seen params))
-            (gnus-info-set-params
-             info
-             (cons `(last-seen ,updated-seen-index . ,updated-seen-id) params)
-             t))
-          (gnus-set-info gnus-newsgroup-name info)
-          (gnus-message 7 "nnhackernews-request-group: new info=%S" info))))
+      (gnus-info-set-marks
+       info
+       (append (assq-delete-all 'seen (gnus-info-marks info))
+               (list `(seen (1 . ,num-headers)))))
+      (gnus-set-info gnus-newsgroup-name info))
     t))
 
 (defsubst nnhackernews--json-read ()
@@ -741,6 +678,20 @@ ALL-STORIES and may throw away comments, etc."
 Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out."
   (interactive)
   (setq nnhackernews--debug-request-items nil)
+  (unless nnhackernews--last-item
+    (mapc (lambda (group)
+            (let* ((full-name (gnus-group-full-name group "nnhackernews:"))
+                   (info (or (gnus-get-info full-name)
+                             (list full-name
+                                   gnus-level-default-subscribed
+                                   nil nil
+                                   (gnus-method-simplify (gnus-group-method full-name))))))
+              (gnus-info-set-read info nil)
+              (gnus-set-info full-name info)))
+          `(,nnhackernews--group-ask
+            ,nnhackernews--group-show
+            ,nnhackernews--group-job
+            ,nnhackernews--group-stories)))
   (when-let ((max-item (or static-max-item (nnhackernews--request-max-item))))
     (let* ((stories (or static-newstories (nnhackernews--request-newstories)))
            (earliest-story (nth (1- (min nnhackernews-max-items-per-scan
@@ -885,7 +836,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
   (with-current-buffer nntp-server-buffer
     (erase-buffer)
     (mapc (lambda (group)
-            (let ((full-name (gnus-group-full-name group '("nnhackernews" (or server "")))))
+            (let ((full-name (gnus-group-full-name group `("nnhackernews" ,(or server "")))))
               (gnus-activate-group full-name t)
               (gnus-group-unsubscribe-group full-name gnus-level-default-subscribed t))
             (insert (format "%s %d 1 y\n" group
@@ -1180,6 +1131,7 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                                      (nnhackernews--score-unread group))
                                    `(,nnhackernews--group-ask
                                      ,nnhackernews--group-show
+                                     ,nnhackernews--group-job
                                      ,nnhackernews--group-stories)))))
       '(gnus-started-hook gnus-after-getting-new-news-hook))
 
