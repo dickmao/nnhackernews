@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Keywords: news
 ;; URL: https://github.com/dickmao/nnhackernews
-;; Package-Requires: ((emacs "25") (request "20190730") (dash "20190401") (anaphora "20180618"))
+;; Package-Requires: ((emacs "25") (request "20190819") (dash "20190401") (anaphora "20180618"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -485,28 +485,23 @@ Originally written by Paul Issartel."
                 (if (or (not (stringp newsrc-seen-id))
                         (zerop (string-to-number newsrc-seen-id)))
                     1
-                  (cl-loop with cand = nil
+                  (cl-loop with marker-id = (string-to-number newsrc-seen-id)
                            for plst in headers
                            for i = 1 then (1+ i)
-                           if (= (string-to-number (plist-get plst :id))
-                                 (string-to-number newsrc-seen-id))
-                           do (gnus-message 7 "nnhackernews-request-group: exact=%s" i)
-                           and return i ;; do not go to finally
-                           end
-                           if (and (null cand)
-                                   (> (string-to-number (plist-get plst :id))
-                                      (string-to-number newsrc-seen-id)))
-                           do (gnus-message 7 "nnhackernews-request-group: cand=%s" (setq cand i))
-                           end
-                           finally return (or cand 0))))
-               (updated-seen-index (- num-headers
-                                      (aif
-                                          (seq-position (reverse headers) nil
-                                                        (lambda (plst _e)
-                                                          (not (plist-get plst :title))))
-                                          it -1)))
-               (updated-seen-id (aif (nth (1- updated-seen-index) headers)
-                                    (plist-get it :id) nil))
+                           for header-id = (string-to-number (plist-get plst :id))
+                           until (>= header-id marker-id)
+                           finally return
+                           (prog1 i
+                             (if (= header-id marker-id)
+                                 (gnus-message 7 "nnhackernews-request-group: exact=%s" i)
+                               (gnus-message
+                                4 (concat "nnhackernews-request-group: "
+                                          "%s not found (stopping at one-index %s/%s, "
+                                          "%s (one-after id is %s)")
+                                marker-id i num-headers header-id
+                                (plist-get (nth i headers) :id)))))))
+               (updated-seen-index num-headers)
+               (updated-seen-id (plist-get (nth (1- updated-seen-index) headers) :id))
                (delta (if newsrc-seen-index
                           (max 0 (- newsrc-seen-index newsrc-seen-index-now))
                         0))
@@ -1149,6 +1144,7 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                                   (gnus-cite-hide-absolute 5)
                                   (gnus-cite-hide-percentage 0)
                                   (gnus-cited-lines-visible '(2 . 2))
+                                  (gnus-use-cache nil)
                                   (gnus-use-adaptive-scoring (quote (line)))
                                   (gnus-newsgroup-adaptive t)
                                   (gnus-simplify-subject-functions (quote (gnus-simplify-subject-fuzzy)))
