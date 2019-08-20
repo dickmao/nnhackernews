@@ -353,7 +353,7 @@ If GROUP classification omitted, figure it out."
   (declare (debug (form &rest form))
            (indent 1))
   `(let* ((group (or ,group (gnus-group-real-name gnus-newsgroup-name)))
-          (gnus-newsgroup-name (gnus-group-prefixed-name group "nnhackernews:")))
+          (gnus-newsgroup-name (gnus-group-full-name group "nnhackernews:")))
      ,@body))
 
 (defun nnhackernews--get-header (article-number &optional group)
@@ -420,15 +420,32 @@ Originally written by Paul Issartel."
 (defsubst nnhackernews--score-unread (group)
   "Avoid having to select the GROUP to make the unread number go down."
   (nnhackernews--with-group group
-    (let* ((full-name (gnus-group-full-name group "nnhackernews:"))
-           (unread (gnus-group-unread full-name)))
+    (let* ((unread (gnus-group-unread gnus-newsgroup-name)))
       (when (and (numberp unread) (> unread 0))
         (save-excursion
           (ignore-errors
             (let ((gnus-auto-select-subject nil))
-              (gnus-summary-read-group full-name nil t)))
+              (gnus-summary-read-group gnus-newsgroup-name nil t)))
           (let ((gnus-summary-next-group-on-exit nil))
             (gnus-summary-exit)))))))
+
+(defsubst nnhackernews--mark-scored-as-read (group)
+  "If a root article (story) is scored in GROUP, that means we've already read it."
+  (nnhackernews--with-group group
+    (save-excursion
+      (ignore-errors
+        (let ((gnus-auto-select-subject nil))
+          (gnus-summary-read-group gnus-newsgroup-name nil t)
+          (dolist (datum gnus-newsgroup-data)
+            (-when-let* ((article (gnus-data-number datum))
+                         (plst (nnhackernews--get-header article))
+                         (scored-story-p (and (plist-get plst :title)
+                                              (> (gnus-summary-article-score article) 0))))
+              (gnus-message 5 "nnhackernews--mark-scored-as-read: %s (%s %s)"
+                            (plist-get plst :title) group article)
+              (gnus-summary-mark-as-read article)))))
+      (let ((gnus-summary-next-group-on-exit nil))
+        (gnus-summary-exit)))))
 
 (deffoo nnhackernews-request-group-scan (group &optional server info)
   "M-g from *Group* calls this."
@@ -555,7 +572,7 @@ Originally written by Paul Issartel."
      :success (nnhackernews--callback result #'nnhackernews--request-vote-success))
     result))
 
-(defun nnhackernews--request-reply (_id _body _root-p)
+(defun nnhackernews--request-reply (_id _body)
   "Reply to ID with BODY."
 )
 
@@ -926,7 +943,6 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
            (reply-p (not (null message-reply-headers)))
            (edit-name (nnhackernews--extract-name (message-fetch-field "Supersedes")))
            (cancel-name (nnhackernews--extract-name (message-fetch-field "Control")))
-           (root-p (message-fetch-field "Reply-Root"))
            (article-number (cdr gnus-article-current))
            (group (if (numberp article-number)
                       (gnus-group-real-name (car gnus-article-current))
@@ -941,8 +957,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                 (buffer-string)))))
       (cond (cancel-name (nnhackernews--request-delete cancel-name))
             (edit-name (nnhackernews--request-edit edit-name body))
-            (reply-p (nnhackernews--request-reply (plist-get header :id)
-                                                  body (stringp root-p)))
+            (reply-p (nnhackernews--request-reply (plist-get header :id) body))
             (link (let* ((parsed-url (url-generic-parse-url link))
                          (host (url-host parsed-url)))
                     (if (and (stringp host) (not (zerop (length host))))
@@ -1125,6 +1140,15 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                                      ,nnhackernews--group-job
                                      ,nnhackernews--group-stories)))))
       '(gnus-started-hook gnus-after-getting-new-news-hook))
+
+(add-hook 'gnus-started-hook
+          (lambda () (mapc (lambda (group)
+                             (nnhackernews--mark-scored-as-read group))
+                           `(,nnhackernews--group-ask
+                             ,nnhackernews--group-show
+                             ,nnhackernews--group-job
+                             ,nnhackernews--group-stories)))
+          t)
 
 ;; `gnus-newsgroup-p' requires valid method post-mail to return t
 (add-to-list 'gnus-valid-select-methods '("nnhackernews" post-mail) t)
