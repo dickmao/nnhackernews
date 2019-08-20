@@ -72,7 +72,7 @@ test: test-compile test-unit test-int
 
 .PHONY: test-int
 test-int:
-	rm -f tests/.newsrc.eld
+	rm -f tests/.newsrc*
 	cask exec ecukes --reporter magnars --debug
 
 .PHONY: dist-clean

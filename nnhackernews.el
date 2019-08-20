@@ -420,24 +420,24 @@ Originally written by Paul Issartel."
 (defsubst nnhackernews--score-unread (group)
   "Avoid having to select the GROUP to make the unread number go down."
   (nnhackernews--with-group group
-   (let* ((group-full-name (gnus-group-full-name group "nnhackernews:"))
-           (unread (gnus-group-unread group-full-name)))
-      (gnus-message 7 "nnhackernews--score-unread: %s unread %s"
-                    group unread)
+    (let* ((full-name (gnus-group-full-name group "nnhackernews:"))
+           (unread (gnus-group-unread full-name)))
       (when (and (numberp unread) (> unread 0))
         (save-excursion
           (ignore-errors
             (let ((gnus-auto-select-subject nil))
-              (gnus-summary-read-group group-full-name nil t)))
+              (gnus-summary-read-group full-name nil t)))
           (let ((gnus-summary-next-group-on-exit nil))
             (gnus-summary-exit)))))))
 
-(deffoo nnhackernews-request-group-scan (group &optional server _info)
+(deffoo nnhackernews-request-group-scan (group &optional server info)
   "M-g from *Group* calls this."
   (nnhackernews--normalize-server)
   (nnhackernews--with-group group
     (gnus-message 5 "nnhackernews-request-group-scan: scanning %s..." group)
-    (gnus-activate-group (gnus-group-full-name group `("nnhackernews" ,(or server ""))) t)
+    (gnus-get-unread-articles-in-group
+     (or info (gnus-get-info gnus-newsgroup-name))
+     (gnus-active (gnus-info-group info)))
     (gnus-message 5 "nnhackernews-request-group-scan: scanning %s...done" group)
     (nnhackernews--score-unread group))
   t)
@@ -454,23 +454,18 @@ Originally written by Paul Issartel."
 (deffoo nnhackernews-request-group (group &optional server _fast info)
   (nnhackernews--normalize-server)
   (nnhackernews--with-group group
-    (let* ((info
-            (or info
-                (gnus-get-info gnus-newsgroup-name)
-                (list gnus-newsgroup-name
-                      gnus-level-default-subscribed
-                      nil nil
-                      (gnus-method-simplify (gnus-group-method gnus-newsgroup-name)))))
+    (let* ((info (or info (gnus-get-info gnus-newsgroup-name)))
            (headers (nnhackernews-get-headers group))
            (num-headers (length headers))
            (status (format "211 %d %d %d %s" num-headers 1 num-headers group)))
       (gnus-message 7 "nnhackernews-request-group: %s" status)
       (nnheader-insert "%s\n" status)
-      (gnus-info-set-marks
-       info
-       (append (assq-delete-all 'seen (gnus-info-marks info))
-               (list `(seen (1 . ,num-headers)))))
-      (gnus-set-info gnus-newsgroup-name info))
+      (when info
+        (gnus-info-set-marks
+         info
+         (append (assq-delete-all 'seen (gnus-info-marks info))
+                 (list `(seen (1 . ,num-headers)))))
+        (gnus-set-info gnus-newsgroup-name info)))
     t))
 
 (defsubst nnhackernews--json-read ()
@@ -680,12 +675,8 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
   (setq nnhackernews--debug-request-items nil)
   (unless nnhackernews--last-item
     (mapc (lambda (group)
-            (let* ((full-name (gnus-group-full-name group "nnhackernews:"))
-                   (info (or (gnus-get-info full-name)
-                             (list full-name
-                                   gnus-level-default-subscribed
-                                   nil nil
-                                   (gnus-method-simplify (gnus-group-method full-name))))))
+            (-when-let* ((full-name (gnus-group-full-name group "nnhackernews:"))
+                         (info (gnus-get-info full-name)))
               (gnus-info-set-read info nil)
               (gnus-set-info full-name info)))
           `(,nnhackernews--group-ask

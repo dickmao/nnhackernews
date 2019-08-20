@@ -5,6 +5,7 @@
 ;; licensed under GNU General Public License v3.0.
 
 (custom-set-default 'gnus-home-directory (concat default-directory "tests"))
+(custom-set-default 'message-directory (concat default-directory "tests/Mail"))
 (custom-set-variables
  '(auto-revert-verbose nil)
  '(auto-revert-stop-on-user-input nil)

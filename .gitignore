@@ -3,3 +3,4 @@ todo.org
 .cask
 dist
 test-install
+tests/.newsrc*
