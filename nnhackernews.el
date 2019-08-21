@@ -51,6 +51,7 @@
 
 (nnoo-declare nnhackernews)
 
+(defconst nnhackernews-hacker-news-url "https://news.ycombinator.com")
 (defconst nnhackernews--group-ask "ask")
 (defconst nnhackernews--group-show "show")
 (defconst nnhackernews--group-job "job")
@@ -271,19 +272,29 @@ If NOQUERY, return nil and avoid querying if not extant."
           ((string-match-p "^\\(Ask\\|Tell\\) HN" title) nnhackernews--group-ask)
           (t nnhackernews--group-stories))))
 
+(defsubst nnhackernews--get-user-cookie ()
+  "Extract Hacker News login from cookies."
+  (let* ((site (url-host (url-generic-parse-url nnhackernews-hacker-news-url))))
+    (cdr (assoc-string
+          "user"
+          (cl-loop with result
+                   for securep in '(t nil)
+                   do (setq result
+                            (request-cookie-alist site "/" securep))
+                   until result
+                   finally return result)))))
+
 (defsubst nnhackernews--who-am-i ()
   "Get my Hacker News username."
-  (when-let ((user-cookie
-              (cdr (assoc-string
-                    "user"
-                    (cl-loop with result
-                             for securep in '(t nil)
-                             do (setq result
-                                      (request-cookie-alist "news.ycombinator.com"
-                                                            "/" securep))
-                             until result
-                             finally return result)))))
-    (car (split-string user-cookie "&"))))
+  (let ((user-cookie (nnhackernews--get-user-cookie)))
+    (unless user-cookie
+      (nnhackernews--request-hidden
+       (format "%s/login" nnhackernews-hacker-news-url))
+      (setq user-cookie (nnhackernews--get-user-cookie)))
+    (if (stringp user-cookie)
+        (car (split-string user-cookie "&"))
+      (gnus-message 3 "nnhackernews--who-am-i: failed to get user-cookie")
+      "")))
 
 (defsubst nnhackernews--append-header (plst &optional group)
   "Update data structures for PLST \"header\".
@@ -420,38 +431,53 @@ Originally written by Paul Issartel."
 (defsubst nnhackernews--score-unread (group)
   "Avoid having to select the GROUP to make the unread number go down."
   (nnhackernews--with-group group
-    (let* ((unread (gnus-group-unread gnus-newsgroup-name)))
-      (when (and (numberp unread) (> unread 0))
-        (save-excursion
-          (ignore-errors
-            (let ((gnus-auto-select-subject nil))
-              (gnus-summary-read-group gnus-newsgroup-name nil t)))
-          (let ((gnus-summary-next-group-on-exit nil))
-            (gnus-summary-exit)))))))
+    (let* ((extant (get-buffer (gnus-summary-buffer-name gnus-newsgroup-name)))
+           (unread (gnus-group-unread gnus-newsgroup-name))
+           (preface (format "nnhackernews--score-unread: %s not rescoring " group)))
+      (cond ((or (not (numberp unread)) (<= unread 0))
+             (gnus-message 7 (concat preface "(unread %s)") unread))
+            ((and extant (buffer-local-value 'gnus-newsgroup-prepared extant))
+             ;; reflect the extant logic in `gnus-summary-setup-buffer'
+             (gnus-message 7 (concat preface "(extant %s)") (buffer-name extant)))
+            (t
+             (save-excursion
+               (let ((gnus-auto-select-subject nil)
+                     (gnus-summary-next-group-on-exit nil))
+                 (gnus-summary-read-group gnus-newsgroup-name nil t)
+                 (gnus-summary-exit))))))))
 
 (defsubst nnhackernews--mark-scored-as-read (group)
   "If a root article (story) is scored in GROUP, that means we've already read it."
   (nnhackernews--with-group group
-    (save-excursion
-      (ignore-errors
-        (let ((gnus-auto-select-subject nil))
-          (gnus-summary-read-group gnus-newsgroup-name nil t)
-          (dolist (datum gnus-newsgroup-data)
-            (-when-let* ((article (gnus-data-number datum))
-                         (plst (nnhackernews--get-header article))
-                         (scored-story-p (and (plist-get plst :title)
-                                              (> (gnus-summary-article-score article) 0))))
-              (gnus-message 5 "nnhackernews--mark-scored-as-read: %s (%s %s)"
-                            (plist-get plst :title) group article)
-              (gnus-summary-mark-as-read article)))))
-      (let ((gnus-summary-next-group-on-exit nil))
-        (gnus-summary-exit)))))
+    (let ((preface (format "nnhackernews--mark-scored-as-read: %s not rescoring " group))
+          (extant (get-buffer (gnus-summary-buffer-name gnus-newsgroup-name)))
+          (unread (gnus-group-unread gnus-newsgroup-name)))
+      (cond ((or (not (numberp unread)) (<= unread 0))
+             (gnus-message 7 (concat preface "(unread %s)") unread))
+            ((and extant (buffer-local-value 'gnus-newsgroup-prepared extant))
+             ;; reflect the extant logic in `gnus-summary-setup-buffer'
+             (gnus-message 7 (concat preface "(extant %s)") (buffer-name extant)))
+            (t
+             (save-excursion
+               (let ((gnus-auto-select-subject nil)
+                     (gnus-summary-next-group-on-exit nil))
+                 (gnus-summary-read-group gnus-newsgroup-name nil t)
+                 (dolist (datum gnus-newsgroup-data)
+                   (-when-let* ((article (gnus-data-number datum))
+                                (plst (nnhackernews--get-header article))
+                                (scored-story-p (and (plist-get plst :title)
+                                                     (> (gnus-summary-article-score article) 0))))
+                     (gnus-message 7 "nnhackernews--mark-scored-as-read: %s (%s %s)"
+                                   (plist-get plst :title) group article)
+                     (gnus-summary-mark-as-read article)))
+                 (gnus-summary-exit))))))))
 
 (deffoo nnhackernews-request-group-scan (group &optional server info)
   "M-g from *Group* calls this."
   (nnhackernews--normalize-server)
   (nnhackernews--with-group group
     (gnus-message 5 "nnhackernews-request-group-scan: scanning %s..." group)
+    (gnus-activate-group gnus-newsgroup-name t)
     (gnus-get-unread-articles-in-group
      (or info (gnus-get-info gnus-newsgroup-name))
      (gnus-active (gnus-info-group info)))
@@ -565,16 +591,32 @@ Originally written by Paul Issartel."
   (let (result)
     (nnhackernews--request
      "nnhackernews--request-vote"
-     (format "https://news.ycombinator.com/vote?%s"
+     (format "%s/vote?%s"
+             nnhackernews-hacker-news-url
              (url-build-query-string
               `((id ,id) (how "up") (goto ,(format "item?id=%s" id)))))
      :backend 'curl
      :success (nnhackernews--callback result #'nnhackernews--request-vote-success))
     result))
 
-(defun nnhackernews--request-reply (_id _body)
-  "Reply to ID with BODY."
-)
+(defsubst nnhackernews--enforce-curl ()
+  "Curl must exist."
+  (unless (executable-find "curl")
+    (error "nnhackernews--enforce-curl: the 'curl' program was not found")))
+
+(defun nnhackernews--request-reply (url text hidden)
+  "Reply URL with TEXT using HIDDEN credentials."
+  (nnhackernews--enforce-curl)
+  (let (result)
+    (nnhackernews--request
+     "nnhackernews--request-reply"
+     url
+     :backend 'curl
+     :data (append (cl-loop for (k v) on hidden by (function cddr)
+                            collect (cons (cl-subseq (symbol-name k) 1) v))
+                   `(("text" . ,text)))
+     :success (nnhackernews--callback result))
+    result))
 
 (defun nnhackernews--request-edit (_id _body)
   "Replace body of ID with BODY."
@@ -583,11 +625,6 @@ Originally written by Paul Issartel."
 (defun nnhackernews--request-delete (_id)
   "Cancel ID."
 )
-
-(defsubst nnhackernews--enforce-curl ()
-  "Curl must exist."
-  (unless (executable-find "curl")
-    (error "nnhackernews--enforce-curl: the 'curl' program was not found")))
 
 (cl-defun nnhackernews--request-error (caller
                                        &key response symbol-status error-thrown
@@ -598,13 +635,13 @@ Originally written by Paul Issartel."
   (gnus-message 3 "%s %s: http status %s, %s" caller symbol-status response-status
                 (error-message-string error-thrown)))
 
-(defun nnhackernews--request-submit-link (title link hidden)
-  "Submit TITLE with LINK and HIDDEN."
+(defun nnhackernews--request-submit-link (url title link hidden)
+  "Submit to URL the TITLE with LINK and HIDDEN."
   (nnhackernews--enforce-curl)
   (let (result)
     (nnhackernews--request
      "nnhackernews--request-submit-link"
-     "https://news.ycombinator.com/submit"
+     url
      :backend 'curl
      :data (append (cl-loop for (k v) on hidden by (function cddr)
                             collect (cons (cl-subseq (symbol-name k) 1) v))
@@ -613,13 +650,13 @@ Originally written by Paul Issartel."
      :success (nnhackernews--callback result))
     result))
 
-(defun nnhackernews--request-submit-text (text hidden)
-  "Submit TEXT and HIDDEN."
+(defun nnhackernews--request-submit-text (url text hidden)
+  "Submit to URL the TEXT with HIDDEN credentials."
   (nnhackernews--enforce-curl)
   (let (result)
     (nnhackernews--request
      "nnhackernews--request-submit-text"
-     "https://news.ycombinator.com/submit"
+     url
      :backend 'curl
      :data (append (cl-loop for (k v) on hidden by (function cddr)
                             collect (cons (cl-subseq (symbol-name k) 1) v))
@@ -777,7 +814,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
      0 0 nil
      (append `((X-Hackernews-Name . ,(plist-get header :id)))
              `((X-Hackernews-ID . ,(plist-get header :id)))
-             `((X-Hackernews-Permalink . ,(format "https://news.ycombinator.com/item?id=%s" (plist-get header :id))))
+             `((X-Hackernews-Permalink . ,(format "%s/item?id=%s" nnhackernews-hacker-news-url (plist-get header :id))))
              (and (integerp score)
                   `((X-Hackernews-Score . ,(number-to-string score))))
              (and (integerp num-comments)
@@ -894,39 +931,78 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
      :success (nnhackernews--callback result))
     result))
 
-(cl-defun nnhackernews--request-submit-success (&key data response &allow-other-keys)
+(defmacro nnhackernews--extract-hidden (dom hidden)
+  "Extract hidden tag-value pairs from DOM into plist HIDDEN."
+  `(-tree-map-nodes
+    (lambda (x)
+      (and (listp x)
+           (eq (car x) 'input)
+           (string= "hidden" (alist-get 'type (cl-second x)))))
+    (lambda (x)
+      (!cons (alist-get 'value (cl-second x)) ,hidden)
+      (!cons (intern (concat ":" (alist-get 'name (cl-second x)))) ,hidden))
+    ,dom))
+
+(cl-defun nnhackernews--request-hidden-success (&key data response &allow-other-keys)
   "If necessary, login first, then return plist of :fnid and :fnop."
   (let* ((dom (nnhackernews--domify data))
          (form (car (alist-get 'form (alist-get 'body dom))))
-         (login-p (string= "submit" (alist-get 'action form))))
+         (url (request-response-url response))
+         (action-string (url-filename (url-generic-parse-url url)))
+         (login-p (aif (alist-get 'action form)
+                      (cl-search it action-string)))
+         hidden)
     (when login-p
-      (setq dom (nnhackernews--domify
-                 (nnhackernews--request-form (request-response-url response)))))
-    (let (hidden)
-      (-tree-map-nodes
-       (lambda (x)
-         (and (listp x)
-              (eq (car x) 'input)
-              (string= "hidden" (alist-get 'type (cl-second x)))))
-       (lambda (x)
-         (!cons (alist-get 'value (cl-second x)) hidden)
-         (!cons (intern (concat ":" (alist-get 'name (cl-second x)))) hidden))
-       dom)
-      hidden)))
+      (setq dom (nnhackernews--domify (nnhackernews--request-form url))))
+    (nnhackernews--extract-hidden dom hidden)
+    (when (and (null hidden) (cl-search "comment" url))
+      (let ((url (replace-regexp-in-string "comment" "item" url))
+            result)
+        (nnhackernews--request
+         "nnhackernews--request-hidden-success"
+         url
+         :success (nnhackernews--callback result))
+        (setq dom (nnhackernews--domify result))
+        (nnhackernews--extract-hidden dom hidden)))
+    hidden))
 
-(defun nnhackernews--request-submit ()
-  "Get the hidden fields FNID and FNOP from `https://news.ycombinator.com/submit'."
+(defun nnhackernews--request-hidden (url)
+  "Get the hidden fields (e.g., FNID, FNOP, HMAC) from URL."
   (let (result)
     (nnhackernews--request
-     "nnhackernews--request-submit"
-     "https://news.ycombinator.com/submit"
+     "nnhackernews--request-hidden"
+     url
      :backend 'curl
-     :success (nnhackernews--callback result #'nnhackernews--request-submit-success))
+     :success (nnhackernews--callback result #'nnhackernews--request-hidden-success))
     result))
 
 (defsubst nnhackernews--extract-name (from)
   "String match on something looking like t1_es076hd in FROM."
   (and (stringp from) (string-match "\\(t[0-9]+_[a-z0-9]+\\)" from) (match-string 1 from)))
+
+(defsubst nnhackernews--extract-unique (message-id)
+  "Get unique from <unique@fqdn> in MESSAGE-ID."
+  (car (split-string (replace-regexp-in-string "[<>]" "" message-id) "@")))
+
+(defsubst nnhackernews--request-post-reply-url (headers)
+  "Return hexified reply url from HEADERS."
+  (let ((references (mail-header-references headers))
+        (immediate (nnhackernews--extract-unique
+                    (mail-header-message-id headers))))
+    (if references
+        (let ((root (nnhackernews--extract-unique
+                     (car (split-string references " ")))))
+          (format "%s/reply?%s"
+                  nnhackernews-hacker-news-url
+                  (url-build-query-string
+                   `((id ,immediate) (goto ,(format "item?id=%s#%s"
+                                                    root
+                                                    immediate))))))
+      (format "%s/comment?%s"
+              nnhackernews-hacker-news-url
+              (url-build-query-string
+                   `((id ,immediate) (goto ,(format "item?id=%s"
+                                                    immediate))))))))
 
 ;; C-c C-c from followup buffer
 ;; message-send-and-exit
@@ -936,35 +1012,33 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
 ;; nnhackernews-request-post
 (deffoo nnhackernews-request-post (&optional server)
   (nnhackernews--normalize-server)
-  (when-let ((hidden (nnhackernews--request-submit)))
-    (let* ((ret t)
-           (title (or (message-fetch-field "Subject") (error "No Subject field")))
-           (link (message-fetch-field "Link"))
-           (reply-p (not (null message-reply-headers)))
-           (edit-name (nnhackernews--extract-name (message-fetch-field "Supersedes")))
-           (cancel-name (nnhackernews--extract-name (message-fetch-field "Control")))
-           (article-number (cdr gnus-article-current))
-           (group (if (numberp article-number)
-                      (gnus-group-real-name (car gnus-article-current))
-                    (or (message-fetch-field "Newsgroups") (error "No Newsgroups field"))))
-           (header (when (numberp article-number)
-                     (nnhackernews--get-header article-number group)))
-           (body
-            (save-excursion
-              (save-restriction
-                (message-goto-body)
-                (narrow-to-region (point) (point-max))
-                (buffer-string)))))
+  (-when-let* ((url (aif message-reply-headers
+                        (nnhackernews--request-post-reply-url it)
+                      (format "%s/submit" nnhackernews-hacker-news-url)))
+               (hidden (nnhackernews--request-hidden url)))
+    (let ((ret t)
+          (title (or (message-fetch-field "Subject") (error "No Subject field")))
+          (link (message-fetch-field "Link"))
+          (reply-p (not (null message-reply-headers)))
+          (edit-name (nnhackernews--extract-name (message-fetch-field "Supersedes")))
+          (cancel-name (nnhackernews--extract-name (message-fetch-field "Control")))
+          (body
+           (save-excursion
+             (save-restriction
+               (message-goto-body)
+               (narrow-to-region (point) (point-max))
+               (buffer-string)))))
       (cond (cancel-name (nnhackernews--request-delete cancel-name))
             (edit-name (nnhackernews--request-edit edit-name body))
-            (reply-p (nnhackernews--request-reply (plist-get header :id) body))
+            (reply-p (let ((result (nnhackernews--request-reply url body hidden)))
+                       (setq ret (nnhackernews--domify result))))
             (link (let* ((parsed-url (url-generic-parse-url link))
                          (host (url-host parsed-url)))
                     (if (and (stringp host) (not (zerop (length host))))
-                        (nnhackernews--request-submit-link title link hidden)
+                        (nnhackernews--request-submit-link url title link hidden)
                       (error "nnhackernews-request-post: invalid url \"%s\"" link)
                       (setq ret nil))))
-            (t (nnhackernews--request-submit-text body hidden)))
+            (t (nnhackernews--request-submit-text url body hidden)))
       ret)))
 
 (defun nnhackernews--browse-story (&rest _args)
