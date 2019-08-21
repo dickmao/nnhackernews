@@ -428,25 +428,32 @@ Originally written by Paul Issartel."
   "Add to HASHTB the pair consisting of entry E's name to its FIELD."
   (nnhackernews--sethash (plist-get e :id) (plist-get e field) hashtb))
 
-(defsubst nnhackernews--score-unread (group)
-  "Avoid having to select the GROUP to make the unread number go down."
+(defun nnhackernews--score-unread (group)
+  "Filter unread messages for GROUP now.
+
+Otherwise *Group* buffer annoyingly overrepresents unread."
   (nnhackernews--with-group group
-    (let* ((extant (get-buffer (gnus-summary-buffer-name gnus-newsgroup-name)))
-           (unread (gnus-group-unread gnus-newsgroup-name))
-           (preface (format "nnhackernews--score-unread: %s not rescoring " group)))
+    (let* ((unread (gnus-group-unread gnus-newsgroup-name))
+           (extant (get-buffer (gnus-summary-buffer-name gnus-newsgroup-name)))
+           (preface (format "nnhackernews--score-unread: %s not rescoring " group))
+           (rescore (lambda ()
+                      (save-excursion
+                        (let ((gnus-auto-select-subject nil)
+                              (gnus-summary-next-group-on-exit nil)
+                              (gnus-summary-buffer
+                               (format "*Rescoring %s*" gnus-newsgroup-name)))
+                          (cl-letf (((symbol-function 'gnus-summary-buffer-name)
+                                     (lambda (&rest _args) gnus-summary-buffer)))
+                            (gnus-summary-read-group gnus-newsgroup-name nil t)
+                            (gnus-summary-exit)))))))
       (cond ((or (not (numberp unread)) (<= unread 0))
              (gnus-message 7 (concat preface "(unread %s)") unread))
-            ((and extant (buffer-local-value 'gnus-newsgroup-prepared extant))
-             ;; reflect the extant logic in `gnus-summary-setup-buffer'
-             (gnus-message 7 (concat preface "(extant %s)") (buffer-name extant)))
-            (t
-             (save-excursion
-               (let ((gnus-auto-select-subject nil)
-                     (gnus-summary-next-group-on-exit nil))
-                 (gnus-summary-read-group gnus-newsgroup-name nil t)
-                 (gnus-summary-exit))))))))
+            (t (if extant
+                   (with-current-buffer extant
+                     (add-hook 'gnus-exit-group-hook rescore nil t))
+                 (funcall rescore)))))))
 
-(defsubst nnhackernews--mark-scored-as-read (group)
+(defun nnhackernews--mark-scored-as-read (group)
   "If a root article (story) is scored in GROUP, that means we've already read it."
   (nnhackernews--with-group group
     (let ((preface (format "nnhackernews--mark-scored-as-read: %s not rescoring " group))
@@ -944,7 +951,16 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
     ,dom))
 
 (cl-defun nnhackernews--request-hidden-success (&key data response &allow-other-keys)
-  "If necessary, login first, then return plist of :fnid and :fnop."
+  "If necessary, login first, then return plist of :fnid and :fnop.
+
+Case 1: We're not logged in.  We'll trigger `login-p`, which should
+take us to the `item?id=ID` page with the required hiddens.
+
+Case 2: We're logged in.  We'll get sent to the frontpage without hiddens.
+We'll need to replace `comment?id=ID` with `item?id=ID` to get them.
+
+We can't just use `item?id=ID` from the start because then
+login-p will always be true."
   (let* ((dom (nnhackernews--domify data))
          (form (car (alist-get 'form (alist-get 'body dom))))
          (url (request-response-url response))
@@ -992,7 +1008,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
     (if references
         (let ((root (nnhackernews--extract-unique
                      (car (split-string references " ")))))
-          (format "%s/reply?%s"
+          (format "%s/comment?%s"
                   nnhackernews-hacker-news-url
                   (url-build-query-string
                    `((id ,immediate) (goto ,(format "item?id=%s#%s"
@@ -1030,8 +1046,11 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                (buffer-string)))))
       (cond (cancel-name (nnhackernews--request-delete cancel-name))
             (edit-name (nnhackernews--request-edit edit-name body))
-            (reply-p (let ((result (nnhackernews--request-reply url body hidden)))
-                       (setq ret (nnhackernews--domify result))))
+            (reply-p (let* ((result (nnhackernews--request-reply url body hidden))
+                            (dom (nnhackernews--domify result)))
+                       (cl-destructuring-bind (tag params &rest args) dom
+                         (setq ret (and (eq tag 'html)
+                                        (string= (alist-get 'op params) "item"))))))
             (link (let* ((parsed-url (url-generic-parse-url link))
                          (host (url-host parsed-url)))
                     (if (and (stringp host) (not (zerop (length host))))

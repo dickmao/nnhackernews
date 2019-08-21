@@ -36,12 +36,12 @@
  (add-function
   :filter-args (symbol-function 'nnhackernews--request)
   (lambda (args)
-    (when (and (string= (car args) "nnhackernews--request-item")
-               scenario-recording-p)
-      (let ((fun0 (plist-get args :success))
+    (when scenario-recording-p
+      (let ((url (cl-second args))
+            (fun0 (plist-get args :success))
             (fun1 (cl-function
                    (lambda (&rest args &key data &allow-other-keys)
-                     (gnus-score-set (number-to-string (plist-get data :id))
+                     (gnus-score-set url
                                      (list data)
                                      scenario-recording-alist)))))
         (setq args (plist-put
@@ -55,14 +55,10 @@
   :before-until (symbol-function 'nnhackernews--request)
   (lambda (caller url &rest args)
     (unless scenario-recording-p
-      (cond ((string= caller "nnhackernews--request-item")
-             (let* ((fun0 (plist-get args :success))
-                    (id (progn (string-match "\\([0-9]+\\)\\.json" url)
-                               (match-string 1 url)))
-                    (plst (or (car (gnus-score-get id scenario-recording-alist))
-                              (error "nnhackernews--request-item: could not playback %s" id))))
-               (funcall fun0 :data plst)))
-            (t (error "Would query out for %s %s" caller url))))))
+      (let* ((fun0 (plist-get args :success))
+             (plst (or (car (gnus-score-get url scenario-recording-alist))
+                       (error "nnhackernews--request-item: could not playback %s" url))))
+        (funcall fun0 :data plst)))))
 
  (add-function
   :filter-args (symbol-function 'nnhackernews--incoming)

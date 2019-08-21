@@ -1,5 +1,7 @@
 |build-status|
 
+  --- Procrastination can be a full-time job.
+
 .. COMMENTARY (see Makefile)
 
 .. |build-status|
