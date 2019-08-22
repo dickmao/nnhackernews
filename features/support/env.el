@@ -56,7 +56,7 @@
   (lambda (caller url &rest args)
     (unless scenario-recording-p
       (let* ((fun0 (plist-get args :success))
-             (plst (or (car (gnus-score-get url scenario-recording-alist))
+             (plst (or (car (gnus-score-get (intern url) scenario-recording-alist))
                        (error "nnhackernews--request-item: could not playback %s" url))))
         (funcall fun0 :data plst)))))
 
