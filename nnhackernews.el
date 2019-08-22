@@ -436,22 +436,42 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
     (let* ((unread (gnus-group-unread gnus-newsgroup-name))
            (extant (get-buffer (gnus-summary-buffer-name gnus-newsgroup-name)))
            (preface (format "nnhackernews--score-unread: %s not rescoring " group))
-           (rescore (lambda ()
+           (rescore-easy (lambda (group)
+                           (save-excursion
+                             (let ((gnus-auto-select-subject nil)
+                                   (gnus-summary-next-group-on-exit nil))
+                               (gnus-summary-read-group group nil t)
+                               (gnus-summary-exit)))))
+           (rescore (lambda (group)
                       (save-excursion
                         (let ((gnus-auto-select-subject nil)
-                              (gnus-summary-next-group-on-exit nil)
-                              (gnus-summary-buffer
-                               (format "*Rescoring %s*" gnus-newsgroup-name)))
+                              (gnus-summary-next-group-on-exit nil))
                           (cl-letf (((symbol-function 'gnus-summary-buffer-name)
-                                     (lambda (&rest _args) gnus-summary-buffer)))
-                            (gnus-summary-read-group gnus-newsgroup-name nil t)
-                            (gnus-summary-exit)))))))
+                                     (lambda (group)
+                                       (concat "*Rescoring "
+                                               (gnus-group-decoded-name group)
+                                               "*")))
+                                    ((symbol-function 'gnus-set-global-variables)
+                                     #'ignore))
+                            (gnus-summary-read-group group nil t)
+                            (gnus-summary-exit)
+                            (add-function
+                             :override (symbol-function 'gnus-summary-update-info)
+                             #'ignore))
+                          (setq gnus-summary-buffer (gnus-summary-buffer-name group)))))))
       (cond ((or (not (numberp unread)) (<= unread 0))
              (gnus-message 7 (concat preface "(unread %s)") unread))
             (t (if extant
-                   (with-current-buffer extant
-                     (add-hook 'gnus-exit-group-hook rescore nil t))
-                 (funcall rescore)))))))
+                   (progn
+                     (with-current-buffer extant
+                       (add-hook 'gnus-exit-group-hook
+                                 (apply-partially rescore gnus-newsgroup-name) nil t))
+                     (add-hook
+                      'gnus-summary-exit-hook
+                      (lambda ()
+                        (remove-function
+                         (symbol-function 'gnus-summary-update-info) #'ignore))))
+                 (funcall rescore-easy gnus-newsgroup-name)))))))
 
 (defun nnhackernews--mark-scored-as-read (group)
   "If a root article (story) is scored in GROUP, that means we've already read it."
