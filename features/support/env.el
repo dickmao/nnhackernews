@@ -37,13 +37,13 @@
   :filter-args (symbol-function 'nnhackernews--request)
   (lambda (args)
     (when scenario-recording-p
-      (let ((url (cl-second args))
-            (fun0 (plist-get args :success))
-            (fun1 (cl-function
-                   (lambda (&rest args &key data &allow-other-keys)
-                     (gnus-score-set url
-                                     (list data)
-                                     scenario-recording-alist)))))
+      (let* ((url (cl-second args))
+             (fun0 (plist-get args :success))
+             (fun1 (cl-function
+                    (lambda (&rest args &key data &allow-other-keys)
+                      (gnus-score-set (intern url)
+                                      (list data)
+                                      scenario-recording-alist)))))
         (setq args (plist-put
                     args :success
                     (lambda (&rest args)

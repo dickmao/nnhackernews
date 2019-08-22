@@ -1359,15 +1359,19 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
        (error (remove-function (symbol-function 'message-fetch-field) concat-func)
               (error (error-message-string err)))))))
 
-(add-function
- :around (symbol-function 'url-http-generic-filter)
- (lambda (f &rest args)
-   (cond ((nnhackernews--gate)
-          (condition-case err
-              (apply f args)
-            (error (gnus-message 7 "url-http-generic-filter: %s"
-                                 (error-message-string err)))))
-         (t (apply f args)))))
+(let ((protect (lambda (caller)
+                 (add-function
+                  :around (symbol-function caller)
+                  (lambda (f &rest args)
+                    (cond ((nnhackernews--gate)
+                           (condition-case err
+                               (apply f args)
+                             (error (gnus-message 7 "%s: %s"
+                                                  caller
+                                                  (error-message-string err)))))
+                          (t (apply f args))))))))
+  (funcall protect 'url-http-generic-filter)
+  (funcall protect 'url-http-end-of-document-sentinel))
 
 ;; Make the scoring entries Markovian
 (add-function
