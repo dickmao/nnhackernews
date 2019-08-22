@@ -1,22 +1,14 @@
-(When "I hide tokens$"
-      (lambda ()
-        (setq nnhackernews--python-module-extra-args '("--token-file" "/dev/null"))))
+(When "^of-record unreads for \"\\(.+\\)\" is \\([.0-9]+\\)$"
+      (lambda (group count)
+        (should (= (string-to-number count) (gnus-group-unread group)))))
 
-(When "I unhide tokens$"
-      (lambda ()
-        (setq nnhackernews--python-module-extra-args nil)))
+(When "^prospective unreads for \"\\(.+\\)\" is \\([.0-9]+\\)$"
+      (lambda (group count)
+        (should (= (string-to-number count) (length gnus-newsgroup-unreads)))))
 
 (When "^I should be in buffer like \"\\(.+\\)\"$"
       (lambda (prefix)
         (should (string-prefix-p prefix (buffer-name)))))
-
-(When "^I goto group \"\\(.*\\)\"$"
-      (lambda (group)
-        (Given "I start an action chain")
-        (And "I press \"R g\"")
-        (And "I type \"%s\"" group)
-        (And "I execute the action chain")
-        (Then "I should be in buffer like \"*Summary nnhackernews:\"")))
 
 (When "^I go to string \"\\(.+\\)\"$"
       (lambda (string)

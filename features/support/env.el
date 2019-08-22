@@ -15,6 +15,8 @@
 (require 'espuds)
 (require 'nnhackernews-test)
 
+(defvar incoming-iteration 0 "Used in filter-args advice of `nnhackernews--incoming'.")
+
 (defmacro if-demote (demote &rest forms)
   (declare (debug t) (indent 1))
   `(if ,demote
@@ -63,10 +65,17 @@
  (add-function
   :filter-args (symbol-function 'nnhackernews--incoming)
   (lambda (_args)
-    '(20724340
-      (20724340 20724338 20724330 20724329 20724323 20724312 20724310
-                20724308 20724275 20724265 20724262 20724261 20724260
-                20724247 20724245 20724231)))))
+    (pcase (cl-incf incoming-iteration)
+      (1
+       '(20724340
+         (20724340 20724338 20724330 20724329 20724323 20724312 20724310
+                   20724308 20724275 20724265 20724262 20724261 20724260
+                   20724247 20724245 20724231)))
+      (2
+       '(20770771
+         (20770761 20770759 20770751 20770740 20770738 20770718 20770714
+                   20770713 20770703 207706825 20770649)))
+      (_ (error "Unprepared for iteration %s" incoming-iteration))))))
 
 (defmacro with-scenario (scenario &rest body)
   `(let* ((name (ecukes-scenario-name ,scenario))

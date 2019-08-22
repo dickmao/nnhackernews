@@ -4,3 +4,4 @@ todo.org
 dist
 test-install
 tests/.newsrc*
+.ecukes*
