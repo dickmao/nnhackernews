@@ -4,4 +4,7 @@ todo.org
 dist
 test-install
 tests/.newsrc*
+tests/Mail
+tests/News
+tests/request
 .ecukes*
