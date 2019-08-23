@@ -76,6 +76,8 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
   :type 'integer
   :group 'nnhackernews)
 
+(defvoo nnhackernews-status-string "")
+
 (defvar nnhackernews--last-item nil "Keep track of where we are.")
 
 (defvar nnhackernews--debug-request-items nil "Keep track of ids to re-request for testing.")
@@ -649,9 +651,19 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
   "Replace body of ID with BODY."
 )
 
-(defun nnhackernews--request-delete (_id)
-  "Cancel ID."
-)
+(defun nnhackernews--request-delete (item &optional root)
+  "Cancel ITEM at root ROOT."
+  (let (result)
+    (nnhackernews--request
+     "nnhackernews--request-delete"
+     (format "%s/delete-confirm?%s"
+             nnhackernews-hacker-news-url
+             (url-build-query-string
+              (cons `(id ,item)
+                    (when root `((goto ,(format "item?id=%s" root)))))))
+     :backend 'curl
+     :success (nnhackernews--callback result #'nnhackernews--request-delete-success))
+    result))
 
 (cl-defun nnhackernews--request-error (caller
                                        &key response symbol-status error-thrown
@@ -984,15 +996,16 @@ login-p will always be true."
   (let* ((dom (nnhackernews--domify data))
          (form (car (alist-get 'form (alist-get 'body dom))))
          (url (request-response-url response))
-         (action-string (url-filename (url-generic-parse-url url)))
-         (login-p (aif (alist-get 'action form)
-                      (cl-search it action-string)))
+         (path (car (url-path-and-query (url-generic-parse-url url))))
+         (login-p (aif (alist-get 'action form) (cl-search it path)))
          hidden)
     (when login-p
       (setq dom (nnhackernews--domify (nnhackernews--request-form url))))
     (nnhackernews--extract-hidden dom hidden)
-    (when (and (null hidden) (cl-search "comment" url))
-      (let ((url (replace-regexp-in-string "comment" "item" url))
+    (unless hidden
+      ;; I've seen "?comment" not redirecting to "?item", in which case
+      ;; there's no hidden information.  Force things here.
+      (let ((url (replace-regexp-in-string path  "/item" url))
             result)
         (nnhackernews--request
          "nnhackernews--request-hidden-success"
@@ -1001,6 +1014,22 @@ login-p will always be true."
         (setq dom (nnhackernews--domify result))
         (nnhackernews--extract-hidden dom hidden)))
     hidden))
+
+(cl-defun nnhackernews--request-delete-success (&key data &allow-other-keys)
+  "Delete with extreme prejudice."
+  (let* ((dom (nnhackernews--domify data))
+         hidden)
+    (nnhackernews--extract-hidden dom hidden)
+    (let (result)
+      (nnhackernews--request
+       "nnhackernews--request-delete-success"
+       (format "%s/xdelete" nnhackernews-hacker-news-url)
+       :backend 'curl
+       :data (append (cl-loop for (k v) on hidden by (function cddr)
+                              collect (cons (cl-subseq (symbol-name k) 1) v))
+                     '(("d" . "Yes")))
+       :success (nnhackernews--callback result))
+      result)))
 
 (defun nnhackernews--request-hidden (url)
   "Get the hidden fields (e.g., FNID, FNOP, HMAC) from URL."
@@ -1012,13 +1041,12 @@ login-p will always be true."
      :success (nnhackernews--callback result #'nnhackernews--request-hidden-success))
     result))
 
-(defsubst nnhackernews--extract-name (from)
-  "String match on something looking like t1_es076hd in FROM."
-  (and (stringp from) (string-match "\\(t[0-9]+_[a-z0-9]+\\)" from) (match-string 1 from)))
-
 (defsubst nnhackernews--extract-unique (message-id)
   "Get unique from <unique@fqdn> in MESSAGE-ID."
-  (car (split-string (replace-regexp-in-string "[<>]" "" message-id) "@")))
+  (when (string-match "\\(<[^>]+>\\)" message-id)
+    (car (split-string
+          (replace-regexp-in-string
+           "[<>]" "" (match-string 1 message-id)) "@"))))
 
 (defsubst nnhackernews--request-post-reply-url (headers)
   "Return hexified reply url from HEADERS."
@@ -1028,7 +1056,7 @@ login-p will always be true."
     (if references
         (let ((root (nnhackernews--extract-unique
                      (car (split-string references " ")))))
-          (format "%s/comment?%s"
+          (format "%s/reply?%s"
                   nnhackernews-hacker-news-url
                   (url-build-query-string
                    `((id ,immediate) (goto ,(format "item?id=%s#%s"
@@ -1039,6 +1067,20 @@ login-p will always be true."
               (url-build-query-string
                    `((id ,immediate) (goto ,(format "item?id=%s"
                                                     immediate))))))))
+
+(defmacro nnhackernews--set-status-string (dom)
+  "Set `nnhackernews-status-string' to DOM remarks for benefit of `nnheader-report'."
+  `(let ((body (alist-get 'body ,dom))
+         remarks)
+     (-tree-map-nodes
+      (lambda (x)
+        (and (listp x)
+             (eq (car x) 'td)
+             (stringp (cl-third x))))
+      (lambda (x) (!cons (cl-third x) remarks))
+      body)
+     (setq nnhackernews-status-string
+           (mapconcat #'string-trim remarks " "))))
 
 ;; C-c C-c from followup buffer
 ;; message-send-and-exit
@@ -1056,28 +1098,47 @@ login-p will always be true."
           (title (or (message-fetch-field "Subject") (error "No Subject field")))
           (link (message-fetch-field "Link"))
           (reply-p (not (null message-reply-headers)))
-          (edit-name (nnhackernews--extract-name (message-fetch-field "Supersedes")))
-          (cancel-name (nnhackernews--extract-name (message-fetch-field "Control")))
+          (edit-item (aif (message-fetch-field "Supersedes")
+                         (nnhackernews--extract-unique it)))
+          (cancel-item (aif (message-fetch-field "Control")
+                           (nnhackernews--extract-unique it)))
           (body
            (save-excursion
              (save-restriction
                (message-goto-body)
                (narrow-to-region (point) (point-max))
                (buffer-string)))))
-      (cond (cancel-name (nnhackernews--request-delete cancel-name))
-            (edit-name (nnhackernews--request-edit edit-name body))
-            (reply-p (let* ((result (nnhackernews--request-reply url body hidden))
-                            (dom (nnhackernews--domify result)))
-                       (cl-destructuring-bind (tag params &rest args) dom
-                         (setq ret (and (eq tag 'html)
-                                        (string= (alist-get 'op params) "item"))))))
-            (link (let* ((parsed-url (url-generic-parse-url link))
-                         (host (url-host parsed-url)))
-                    (if (and (stringp host) (not (zerop (length host))))
-                        (nnhackernews--request-submit-link url title link hidden)
-                      (error "nnhackernews-request-post: invalid url \"%s\"" link)
-                      (setq ret nil))))
-            (t (nnhackernews--request-submit-text url body hidden)))
+      (cond (cancel-item
+             (let* ((header (nnhackernews-find-header cancel-item))
+                    (result (nnhackernews--request-delete
+                             cancel-item
+                             (and (null (plist-get header :title))
+                                  (plist-get (nnhackernews--retrieve-root header) :id))))
+                    (dom (nnhackernews--domify result)))
+               (cl-destructuring-bind (tag params &rest args) dom
+                 (setq ret (and (eq tag 'html)
+                                (string= (alist-get 'op params) "item")))
+                 (unless ret (nnhackernews--set-status-string dom)))))
+            (edit-item
+             (nnhackernews--request-edit edit-item body))
+            (reply-p
+             (let* ((path (car (url-path-and-query (url-generic-parse-url url))))
+                    (url (replace-regexp-in-string path "/comment" url))
+                    (result (nnhackernews--request-reply url body hidden))
+                    (dom (nnhackernews--domify result)))
+               (cl-destructuring-bind (tag params &rest args) dom
+                 (setq ret (and (eq tag 'html)
+                                (string= (alist-get 'op params) "item")))
+                 (unless ret (nnhackernews--set-status-string dom)))))
+            (link
+             (let* ((parsed-url (url-generic-parse-url link))
+                    (host (url-host parsed-url)))
+               (if (and (stringp host) (not (zerop (length host))))
+                   (nnhackernews--request-submit-link url title link hidden)
+                 (error "nnhackernews-request-post: invalid url \"%s\"" link)
+                 (setq ret nil))))
+            (t
+             (nnhackernews--request-submit-text url body hidden)))
       ret)))
 
 (defun nnhackernews--browse-story (&rest _args)

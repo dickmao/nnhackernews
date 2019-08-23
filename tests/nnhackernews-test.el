@@ -6,6 +6,7 @@
 
 (custom-set-default 'gnus-home-directory (concat default-directory "tests"))
 (custom-set-default 'message-directory (concat default-directory "tests/Mail"))
+(custom-set-default 'request-storage-directory (concat default-directory "tests/request"))
 (custom-set-variables
  '(auto-revert-verbose nil)
  '(auto-revert-stop-on-user-input nil)
