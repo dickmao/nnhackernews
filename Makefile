@@ -72,8 +72,8 @@ test: test-compile test-unit test-int
 
 .PHONY: test-int
 test-int:
-	rm -f tests/.newsrc*
-	cask exec ecukes --reporter magnars --debug
+	rm -rf tests/.newsrc* tests/Mail tests/News
+	cask exec ecukes --reporter magnars
 
 .PHONY: dist-clean
 dist-clean:
