@@ -447,32 +447,31 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
            (rescore (lambda (group)
                       (save-excursion
                         (let ((gnus-auto-select-subject nil)
-                              (gnus-summary-next-group-on-exit nil))
+                              (gnus-summary-next-group-on-exit nil)
+                              (orig-buffer gnus-summary-buffer))
                           (cl-letf (((symbol-function 'gnus-summary-buffer-name)
                                      (lambda (group)
                                        (concat "*Rescoring "
                                                (gnus-group-decoded-name group)
-                                               "*")))
-                                    ((symbol-function 'gnus-set-global-variables)
-                                     #'ignore))
+                                               "*"))))
                             (gnus-summary-read-group group nil t)
-                            (gnus-summary-exit)
-                            (add-function
-                             :override (symbol-function 'gnus-summary-update-info)
-                             #'ignore))
-                          (setq gnus-summary-buffer (gnus-summary-buffer-name group)))))))
+                            (dolist (local '(gnus-newsgroup-unreads))
+                              (let ((new (eval local)))
+                                (with-current-buffer orig-buffer
+                                  (let ((orig (eval local)))
+                                    (setf (buffer-local-value local orig-buffer)
+                                          (append orig (seq-filter
+                                                        (lambda (elt) (> elt (length gnus-newsgroup-headers))) new)))
+                                    (gnus-message 5 "extend %s from %s to %s"
+                                                  local orig (eval local))))))
+                            (gnus-summary-exit))
+                          (setq gnus-summary-buffer orig-buffer))))))
       (cond ((or (not (numberp unread)) (<= unread 0))
              (gnus-message 7 (concat preface "(unread %s)") unread))
             (t (if extant
-                   (progn
-                     (with-current-buffer extant
-                       (add-hook 'gnus-exit-group-hook
-                                 (apply-partially rescore gnus-newsgroup-name) nil t))
-                     (add-hook
-                      'gnus-summary-exit-hook
-                      (lambda ()
-                        (remove-function
-                         (symbol-function 'gnus-summary-update-info) #'ignore))))
+                   (with-current-buffer extant
+                     (add-hook 'gnus-exit-group-hook
+                               (apply-partially rescore gnus-newsgroup-name) nil t))
                  (funcall rescore-easy gnus-newsgroup-name)))))))
 
 (defun nnhackernews--mark-scored-as-read (group)
