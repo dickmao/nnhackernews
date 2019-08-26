@@ -14,6 +14,7 @@
 (add-to-list 'load-path (f-expand "tests" (ecukes-project-path)))
 (require 'espuds)
 (require 'nnhackernews-test)
+(require 'cl) ;; for auth-source
 
 (defvar incoming-iteration 0 "Used in filter-args advice of `nnhackernews--incoming'.")
 
@@ -30,6 +31,13 @@
     (when (file-exists-p quick-file)
       (message "Deleting %s" quick-file)
       (delete-file quick-file))))
+
+(defun save-log (buffer-or-name file-name)
+  "from tkf/emacs-ipython-notebook ein:testing-save-buffer."
+  (when (and buffer-or-name (get-buffer buffer-or-name) file-name)
+    (with-current-buffer buffer-or-name
+      (let ((coding-system-for-write 'raw-text))
+        (write-region (point-min) (point-max) file-name)))))
 
 (defvar scenario-recording-alist '((touched nil)))
 (defvar scenario-recording-p t)
@@ -75,6 +83,14 @@
        '(20770771
          (20770761 20770759 20770751 20770740 20770738 20770718 20770714
                    20770713 20770703 20770649)))
+      (3
+       '(20784930
+         (20784900 20784892 20784881 20784878 20784877 20784864 20784858
+                   20784855 20784849 20784839 20784831 20784823)))
+      (4
+       '(20784968
+         (20784964 20784962 20784961 20784957 20784944 20784900 20784892
+                   20784881 20784878 20784877 20784864)))
       (_ (error "Unprepared for iteration %s" incoming-iteration))))))
 
 (defmacro with-scenario (scenario &rest body)
@@ -117,6 +133,7 @@
  )
 
 (Teardown
+ (save-log request-log-buffer-name (f-expand "tests/request-log" (ecukes-project-path)))
  (cleanup)
 )
 

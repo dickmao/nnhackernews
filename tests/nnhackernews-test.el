@@ -8,6 +8,7 @@
 (custom-set-default 'message-directory (concat default-directory "tests/Mail"))
 (custom-set-default 'request-storage-directory (concat default-directory "tests/request"))
 (custom-set-variables
+ `(auth-sources (quote ,(list (concat (file-name-as-directory gnus-home-directory) ".netrc"))))
  '(auto-revert-verbose nil)
  '(auto-revert-stop-on-user-input nil)
  '(gnus-read-active-file nil)
@@ -20,7 +21,13 @@
  '(gnus-select-method (quote (nnnil)))
  '(gnus-message-highlight-citation nil)
  '(gnus-verbose 8)
+ '(request-log-level (quote debug))
+ '(gnus-large-ephemeral-newsgroup 4000)
+ '(gnus-large-newsgroup 4000)
  '(gnus-interactive-exit (quote quiet)))
+
+(with-eval-after-load 'request
+  (defun request--safe-delete-files (&rest args)))
 
 (require 'nnhackernews)
 (require 'ert)
@@ -51,5 +58,21 @@
                       (apply f args)
                     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest args) t)))
                       (apply f args))))))
+
+(add-function
+ :filter-args (symbol-function 'read-string)
+ (lambda (args)
+   (when (string-match-p "\\buser\\b" (car args))
+     (setf (nthcdr 3 args) (list (getenv "HNUSER"))))
+   args))
+
+(add-function
+ :filter-args (symbol-function 'read-passwd)
+ (lambda (args)
+   (when (string-match-p "\\bPassword for\\b" (car args))
+     (cond ((>= (length args) 2)
+            (setf (nthcdr 2 args) (list (getenv "HNPASSWORD"))))
+           (t (setf (nthcdr 1 args) (list nil (getenv "HNPASSWORD"))))))
+   args))
 
 (provide 'nnhackernews-test)

@@ -24,6 +24,13 @@
           (let ((inhibit-read-only t))
             (erase-buffer)))))
 
+(When "^I scan news$"
+      (lambda ()
+        (setq nnhackernews--last-scan-time 0)
+        (And "I switch to buffer \"*Group*\"")
+        (And "I press \"g\"")
+        (And "I dump buffer")))
+
 (When "^I dump buffer"
       (lambda () (message "%s" (buffer-string))))
 

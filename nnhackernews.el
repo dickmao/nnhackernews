@@ -203,6 +203,8 @@ Normalize it to \"nnhackernews-default\"."
     (unless (string= server canonical)
       (error "nnhackernews--normalize-server: multiple servers unsupported!"))))
 
+(defvar nnhackernews-score-files nil "For `nnhackernews--ensure-score-file'.")
+
 (defvar nnhackernews-location-hashtb (gnus-make-hashtable)
   "Id -> ( group . index ).")
 
@@ -286,17 +288,97 @@ If NOQUERY, return nil and avoid querying if not extant."
                    until result
                    finally return result)))))
 
+(defun nnhackernews--request-login (url &optional hidden)
+  "Store a cookie from URL with HIDDEN plist."
+  (let* (result
+         (auth-source-do-cache nil)
+         (auth-source-debug 'trivia)
+         (auth-source-creation-prompts '((user . "news.ycombinator.com user: ")
+                                         (secret . "Password for %u: ")))
+         (found (car (auth-source-search :max 1 :host "news.ycombinator.com" :require
+                                         '(:user :secret) :create t))))
+    (nnhackernews--request
+     "nnhackernews--request-login"
+     url
+     :backend 'curl
+     :data (append
+            (cl-loop for (k v) on hidden by (function cddr)
+                     collect (cons (cl-subseq (symbol-name k) 1) v))
+            `(("acct" . ,(plist-get found :user))
+              ("pw" . ,(let ((secret (plist-get found :secret)))
+                         (if (functionp secret)
+                             (funcall secret)
+                           secret)))))
+     :success (nnhackernews--callback result))
+    result))
+
+(defsubst nnhackernews--domify (html)
+  "Parse HTML into dom."
+  (with-temp-buffer
+    (insert html)
+    (when (fboundp 'libxml-parse-html-region)
+      (libxml-parse-html-region (point-min) (point-max)))))
+
+(defmacro nnhackernews--extract-hidden (dom hidden)
+  "Extract hidden tag-value pairs from DOM into plist HIDDEN."
+  `(-tree-map-nodes
+    (lambda (x)
+      (and (listp x)
+           (eq (car x) 'input)
+           (string= "hidden" (alist-get 'type (cl-second x)))))
+    (lambda (x)
+      (!cons (alist-get 'value (cl-second x)) ,hidden)
+      (!cons (intern (concat ":" (alist-get 'name (cl-second x)))) ,hidden))
+    ,dom))
+
+(cl-defun nnhackernews--request-hidden-success (&key data response &allow-other-keys)
+  "If necessary, login first, then return plist of :fnid and :fnop.
+
+Case 1: We're not logged in.  We'll trigger `login-p`, which should
+take us to the `item?id=ID` page with the required hiddens.
+
+Case 2: We're logged in.  We'll get sent to the frontpage without hiddens.
+We'll need to replace `comment?id=ID` with `item?id=ID` to get them.
+
+We can't just use `item?id=ID` from the start because then
+login-p will always be true."
+  (let* ((dom (nnhackernews--domify data))
+         (form (car (alist-get 'form (alist-get 'body dom))))
+         (url (request-response-url response))
+         (path (car (url-path-and-query (url-generic-parse-url url))))
+         (login-p (aif (alist-get 'action form) (cl-search it path)))
+         hidden)
+    (when login-p
+      (setq dom (nnhackernews--domify (nnhackernews--request-login url))))
+    (nnhackernews--extract-hidden dom hidden)
+    (unless hidden
+      ;; I've seen "?comment" not redirecting to "?item", in which case
+      ;; there's no hidden information.  Force things here.
+      (let ((url (replace-regexp-in-string path  "/item" url))
+            result)
+        (nnhackernews--request
+         "nnhackernews--request-hidden-success"
+         url
+         :success (nnhackernews--callback result))
+        (setq dom (nnhackernews--domify result))
+        (nnhackernews--extract-hidden dom hidden)))
+    hidden))
+
+(defun nnhackernews--request-hidden (url)
+  "Get the hidden fields (e.g., FNID, FNOP, HMAC) from URL."
+  (let (result)
+    (nnhackernews--request
+     "nnhackernews--request-hidden"
+     url
+     :backend 'curl
+     :success (nnhackernews--callback result #'nnhackernews--request-hidden-success))
+    result))
+
 (defsubst nnhackernews--who-am-i ()
   "Get my Hacker News username."
   (let ((user-cookie (nnhackernews--get-user-cookie)))
-    (unless user-cookie
-      (nnhackernews--request-hidden
-       (format "%s/login" nnhackernews-hacker-news-url))
-      (setq user-cookie (nnhackernews--get-user-cookie)))
-    (if (stringp user-cookie)
-        (car (split-string user-cookie "&"))
-      (gnus-message 3 "nnhackernews--who-am-i: failed to get user-cookie")
-      "")))
+    (when (stringp user-cookie)
+        (car (split-string user-cookie "&")))))
 
 (defsubst nnhackernews--append-header (plst &optional group)
   "Update data structures for PLST \"header\".
@@ -315,10 +397,7 @@ If GROUP classification omitted, figure it out."
 
 (defun nnhackernews-vote-current-article (vote)
   "VOTE is +1, -1, 0."
-  (unless gnus-article-current ;; gnus-article-current or gnus-current-article?
-    (error "No current article"))
-  (unless gnus-newsgroup-name
-    (error "No current newgroup"))
+  (unless gnus-article-current (error "No current article"))
   (let* ((header (nnhackernews--get-header
                   (cdr gnus-article-current)
                   (gnus-group-real-name (car gnus-article-current))))
@@ -329,7 +408,9 @@ If GROUP classification omitted, figure it out."
                               (format "%s" vote)))))
     (let ((inhibit-read-only t))
       (nnheader-replace-header "score" new-score))
-    (nnhackernews--request-vote (plist-get header :id) vote)))
+    (unless (nnhackernews--request-vote (plist-get header :id) vote)
+      (gnus-message 5 "nnhackernews-vote-current-article: failed for %s"
+                    (plist-get header :id)))))
 
 (defsubst nnhackernews--gate (&optional group)
   "Apply our minor modes only when the following conditions hold for GROUP."
@@ -430,49 +511,60 @@ Originally written by Paul Issartel."
   "Add to HASHTB the pair consisting of entry E's name to its FIELD."
   (nnhackernews--sethash (plist-get e :id) (plist-get e field) hashtb))
 
+(defsubst nnhackernews--summary-exit ()
+  "Call `gnus-summary-exit' without the hackery."
+  (remove-function (symbol-function 'gnus-summary-exit)
+                   (symbol-function 'nnhackernews--score-pending))
+  (gnus-summary-exit)
+  (add-function :after (symbol-function 'gnus-summary-exit)
+                (symbol-function 'nnhackernews--score-pending)))
+
+(defsubst nnhackernews--ensure-score-files (group)
+  "File I/O remains a perennial problem for score files for GROUP."
+  (if-let ((files (alist-get (intern group) nnhackernews-score-files)))
+      (condition-case nil
+        (progn
+          (dolist (file files (gnus-score-score-files group))
+            (gnus-score-load-score-alist file)))
+        (error nil))
+    t))
+
+(defsubst nnhackernews--rescore (group &optional force)
+  "Can't figure out GROUP hook that can remove itself (quine conundrum).
+
+FORCE is generally t unless coming from `nnhackernews--score-pending'."
+  (when (nnhackernews--gate group)
+    (cl-loop repeat 5
+             for ensured = (nnhackernews--ensure-score-files group)
+             until ensured
+             do (sleep-for 0 300)
+             finally (unless ensured
+                       (gnus-message 2 "nnhackernews--rescore: Bad score files!")))
+    (let* ((num-headers (length (nnhackernews-get-headers
+                                 (gnus-group-real-name group))))
+           (marks (gnus-info-marks (nth 2 (gnus-group-entry group))))
+           (seen (or (cdr (--max-by (> (or (cdr it) 0) (or (cdr other) 0))
+                                    (alist-get 'seen marks)))
+                     0)))
+      (unless (zerop seen)
+        (when (or force (> num-headers seen))
+          (save-excursion
+            (let ((gnus-auto-select-subject nil)
+                  (gnus-summary-next-group-on-exit nil))
+              (gnus-summary-read-group group nil t)
+              (nnhackernews--summary-exit))))))))
+
+(defalias 'nnhackernews--score-pending
+  (lambda (&rest _args) (nnhackernews--rescore (gnus-group-name-at-point))))
+
 (defun nnhackernews--score-unread (group)
   "Filter unread messages for GROUP now.
 
 Otherwise *Group* buffer annoyingly overrepresents unread."
   (nnhackernews--with-group group
-    (let* ((unread (gnus-group-unread gnus-newsgroup-name))
-           (extant (get-buffer (gnus-summary-buffer-name gnus-newsgroup-name)))
-           (preface (format "nnhackernews--score-unread: %s not rescoring " group))
-           (rescore-easy (lambda (group)
-                           (save-excursion
-                             (let ((gnus-auto-select-subject nil)
-                                   (gnus-summary-next-group-on-exit nil))
-                               (gnus-summary-read-group group nil t)
-                               (gnus-summary-exit)))))
-           (rescore (lambda (group)
-                      (save-excursion
-                        (let ((gnus-auto-select-subject nil)
-                              (gnus-summary-next-group-on-exit nil)
-                              (orig-buffer gnus-summary-buffer))
-                          (cl-letf (((symbol-function 'gnus-summary-buffer-name)
-                                     (lambda (group)
-                                       (concat "*Rescoring "
-                                               (gnus-group-decoded-name group)
-                                               "*"))))
-                            (gnus-summary-read-group group nil t)
-                            (dolist (local '(gnus-newsgroup-unreads))
-                              (let ((new (eval local)))
-                                (with-current-buffer orig-buffer
-                                  (let ((orig (eval local)))
-                                    (setf (buffer-local-value local orig-buffer)
-                                          (append orig (seq-filter
-                                                        (lambda (elt) (> elt (length gnus-newsgroup-headers))) new)))
-                                    (gnus-message 5 "extend %s from %s to %s"
-                                                  local orig (eval local))))))
-                            (gnus-summary-exit))
-                          (setq gnus-summary-buffer orig-buffer))))))
-      (cond ((or (not (numberp unread)) (<= unread 0))
-             (gnus-message 7 (concat preface "(unread %s)") unread))
-            (t (if extant
-                   (with-current-buffer extant
-                     (add-hook 'gnus-exit-group-hook
-                               (apply-partially rescore gnus-newsgroup-name) nil t))
-                 (funcall rescore-easy gnus-newsgroup-name)))))))
+    (let ((extant (get-buffer (gnus-summary-buffer-name gnus-newsgroup-name))))
+      (unless extant
+        (nnhackernews--rescore gnus-newsgroup-name t)))))
 
 (defun nnhackernews--mark-scored-as-read (group)
   "If a root article (story) is scored in GROUP, that means we've already read it."
@@ -487,8 +579,7 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
              (gnus-message 7 (concat preface "(extant %s)") (buffer-name extant)))
             (t
              (save-excursion
-               (let ((gnus-auto-select-subject nil)
-                     (gnus-summary-next-group-on-exit nil))
+               (let ((gnus-auto-select-subject nil))
                  (gnus-summary-read-group gnus-newsgroup-name nil t)
                  (dolist (datum gnus-newsgroup-data)
                    (-when-let* ((article (gnus-data-number datum))
@@ -498,7 +589,7 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
                      (gnus-message 7 "nnhackernews--mark-scored-as-read: %s (%s %s)"
                                    (plist-get plst :title) group article)
                      (gnus-summary-mark-as-read article)))
-                 (gnus-summary-exit))))))))
+                 (nnhackernews--summary-exit))))))))
 
 (deffoo nnhackernews-request-group-scan (group &optional server info)
   "M-g from *Group* calls this."
@@ -588,43 +679,61 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
            :error (apply-partially #'nnhackernews--request-error caller)
            attributes)))
 
-(defsubst nnhackernews--domify (html)
-  "Parse HTML into dom."
-  (with-temp-buffer
-    (insert html)
-    (when (fboundp 'libxml-parse-html-region)
-      (libxml-parse-html-region (point-min) (point-max)))))
-
-(cl-defun nnhackernews--request-vote-success (&key data response &allow-other-keys)
-  "If necessary, login first, then return plist of :fnid and :fnop."
+(cl-defun nnhackernews--request-vote-success (item vote &key data &allow-other-keys)
+  "If necessary, login first, then locate vote link depending on VOTE sign."
   (let* ((dom (nnhackernews--domify data))
-         (form (alist-get 'form (alist-get 'body dom)))
-         (login-p (string= "vote" (alist-get 'action (car form))))
-         hidden)
-    (when login-p
-      (-tree-map-nodes
-       (lambda (x)
-         (and (listp x)
-              (eq (car x) 'input)
-              (string= "hidden" (alist-get 'type (cl-second x)))))
-       (lambda (x)
-         (!cons (alist-get 'value (cl-second x)) hidden)
-         (!cons (intern (concat ":" (alist-get 'name (cl-second x)))) hidden))
-       form)
-      (setq dom (nnhackernews--domify
-                 (nnhackernews--request-form (request-response-url response) hidden))))))
+         (before (format "%s_%s" (if (> vote 0) "up" "un") item))
+         (after (format "%s_%s" (if (<= vote 0) "up" "un") item))
+         before-found result)
+    (-tree-map-nodes
+     (lambda (x)
+       (and (listp x)
+            (eq (car x) 'a)
+            (let ((id (alist-get 'id (cl-second x))))
+              (or (string= before id) (string= after id)))))
+     (lambda (x)
+       (let ((id (alist-get 'id (cl-second x)))
+             (href (alist-get 'href (cl-second x))))
+         (cond ((string= before id)
+                (setq before-found (concat (file-name-as-directory nnhackernews-hacker-news-url) href)))
+               ((string= after id) (setq result t)))))
+     dom)
+    (when before-found
+      (nnhackernews--request
+       "nnhackernews--request-vote-success"
+       before-found
+       :backend 'curl
+       :success (nnhackernews--callback
+                 result
+                 (cl-function
+                  (lambda (&key data response &allow-other-keys)
+                    (let* ((dom (nnhackernews--domify data))
+                           (form (alist-get 'form (alist-get 'body dom)))
+                           (url (request-response-url response)))
+                      (when (string= "vote" (alist-get 'action (car form)))
+                        (setq dom (nnhackernews--domify
+                                   (nnhackernews--request-login url))))
+                      (let (result0)
+                       (-tree-map-nodes
+                        (lambda (x)
+                          (and (listp x)
+                               (eq (car x) 'a)
+                               (string= after (alist-get 'id (cl-second x)))))
+                        (lambda (_x) (setq result0 t))
+                        dom)
+                       result0)))))))
+    result))
 
-(defun nnhackernews--request-vote (id _vote)
-  "Tally for ID the VOTE."
+(defun nnhackernews--request-vote (item vote)
+  "Tally for ITEM the VOTE."
   (let (result)
     (nnhackernews--request
      "nnhackernews--request-vote"
-     (format "%s/vote?%s"
-             nnhackernews-hacker-news-url
-             (url-build-query-string
-              `((id ,id) (how "up") (goto ,(format "item?id=%s" id)))))
+     (format "%s/item?id=%s" nnhackernews-hacker-news-url item)
      :backend 'curl
-     :success (nnhackernews--callback result #'nnhackernews--request-vote-success))
+     :success (nnhackernews--callback
+               result
+               (apply-partially #'nnhackernews--request-vote-success item vote)))
     result))
 
 (defsubst nnhackernews--enforce-curl ()
@@ -646,9 +755,19 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
      :success (nnhackernews--callback result))
     result))
 
-(defun nnhackernews--request-edit (_id _body)
-  "Replace body of ID with BODY."
-)
+(defun nnhackernews--request-edit (_item _body)
+  "Replace body of ITEM with BODY."
+  (let (result)
+    ;; (nnhackernews--request
+    ;;  "nnhackernews--request-edit"
+    ;;  (format "%s/delete-confirm?%s"
+    ;;          nnhackernews-hacker-news-url
+    ;;          (url-build-query-string
+    ;;           (cons `(id ,item)
+    ;;                 (when root `((goto ,(format "item?id=%s" root)))))))
+    ;;  :backend 'curl
+    ;;  :success (nnhackernews--callback result #'nnhackernews--request-delete-success))
+    result))
 
 (defun nnhackernews--request-delete (item &optional root)
   "Cancel ITEM at root ROOT."
@@ -946,74 +1065,6 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
     (when (string-prefix-p magic string)
       (message "%s: %s" server (substring string (length magic))))))
 
-(defun nnhackernews--request-form (url &optional hidden)
-  "Store a cookie from URL with HIDDEN plist."
-  (let* (result
-         (auth-source-do-cache nil)
-         (auth-source-creation-prompts '((user . "news.ycombinator.com user: ")
-                                         (secret . "Password for %u: ")))
-         (found (car (auth-source-search :max 1 :host "news.ycombinator.com" :require
-                                         '(:user :secret) :create t))))
-    (nnhackernews--request
-     "nnhackernews--request-form"
-     url
-     :backend 'curl
-     :data (append
-            (cl-loop for (k v) on hidden by (function cddr)
-                     collect (cons (cl-subseq (symbol-name k) 1) v))
-            `(("acct" . ,(plist-get found :user))
-              ("pw" . ,(let ((secret (plist-get found :secret)))
-                         (if (functionp secret)
-                             (funcall secret)
-                           secret)))))
-     :success (nnhackernews--callback result))
-    result))
-
-(defmacro nnhackernews--extract-hidden (dom hidden)
-  "Extract hidden tag-value pairs from DOM into plist HIDDEN."
-  `(-tree-map-nodes
-    (lambda (x)
-      (and (listp x)
-           (eq (car x) 'input)
-           (string= "hidden" (alist-get 'type (cl-second x)))))
-    (lambda (x)
-      (!cons (alist-get 'value (cl-second x)) ,hidden)
-      (!cons (intern (concat ":" (alist-get 'name (cl-second x)))) ,hidden))
-    ,dom))
-
-(cl-defun nnhackernews--request-hidden-success (&key data response &allow-other-keys)
-  "If necessary, login first, then return plist of :fnid and :fnop.
-
-Case 1: We're not logged in.  We'll trigger `login-p`, which should
-take us to the `item?id=ID` page with the required hiddens.
-
-Case 2: We're logged in.  We'll get sent to the frontpage without hiddens.
-We'll need to replace `comment?id=ID` with `item?id=ID` to get them.
-
-We can't just use `item?id=ID` from the start because then
-login-p will always be true."
-  (let* ((dom (nnhackernews--domify data))
-         (form (car (alist-get 'form (alist-get 'body dom))))
-         (url (request-response-url response))
-         (path (car (url-path-and-query (url-generic-parse-url url))))
-         (login-p (aif (alist-get 'action form) (cl-search it path)))
-         hidden)
-    (when login-p
-      (setq dom (nnhackernews--domify (nnhackernews--request-form url))))
-    (nnhackernews--extract-hidden dom hidden)
-    (unless hidden
-      ;; I've seen "?comment" not redirecting to "?item", in which case
-      ;; there's no hidden information.  Force things here.
-      (let ((url (replace-regexp-in-string path  "/item" url))
-            result)
-        (nnhackernews--request
-         "nnhackernews--request-hidden-success"
-         url
-         :success (nnhackernews--callback result))
-        (setq dom (nnhackernews--domify result))
-        (nnhackernews--extract-hidden dom hidden)))
-    hidden))
-
 (cl-defun nnhackernews--request-delete-success (&key data &allow-other-keys)
   "Delete with extreme prejudice."
   (let* ((dom (nnhackernews--domify data))
@@ -1029,16 +1080,6 @@ login-p will always be true."
                      '(("d" . "Yes")))
        :success (nnhackernews--callback result))
       result)))
-
-(defun nnhackernews--request-hidden (url)
-  "Get the hidden fields (e.g., FNID, FNOP, HMAC) from URL."
-  (let (result)
-    (nnhackernews--request
-     "nnhackernews--request-hidden"
-     url
-     :backend 'curl
-     :success (nnhackernews--callback result #'nnhackernews--request-hidden-success))
-    result))
 
 (defsubst nnhackernews--extract-unique (message-id)
   "Get unique from <unique@fqdn> in MESSAGE-ID."
@@ -1119,7 +1160,12 @@ login-p will always be true."
                                 (string= (alist-get 'op params) "item")))
                  (unless ret (nnhackernews--set-status-string dom)))))
             (edit-item
-             (nnhackernews--request-edit edit-item body))
+             (let* ((result (nnhackernews--request-edit edit-item body))
+                    (dom (nnhackernews--domify result)))
+               (cl-destructuring-bind (tag params &rest args) dom
+                 (setq ret (and (eq tag 'html)
+                                (string= (alist-get 'op params) "item")))
+                 (unless ret (nnhackernews--set-status-string dom)))))
             (reply-p
              (let* ((path (car (url-path-and-query (url-generic-parse-url url))))
                     (url (replace-regexp-in-string path "/comment" url))
@@ -1134,7 +1180,7 @@ login-p will always be true."
                     (host (url-host parsed-url)))
                (if (and (stringp host) (not (zerop (length host))))
                    (nnhackernews--request-submit-link url title link hidden)
-                 (error "nnhackernews-request-post: invalid url \"%s\"" link)
+                 (gnus-message 3 "nnhackernews-request-post: invalid url \"%s\"" link)
                  (setq ret nil))))
             (t
              (nnhackernews--request-submit-text url body hidden)))
@@ -1323,6 +1369,31 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                              ,nnhackernews--group-stories)))
           t)
 
+;; `message-send-news' avoid "There is no From line."
+(add-hook 'message-header-hook
+          (lambda () (unless (message-fetch-field "from")
+                       (save-restriction
+                         (widen)
+                         (message-carefully-insert-headers
+                          (list (cons 'from "tbd@ycombinator.com")))))))
+
+;; "Can't figure out hook that can remove itself (quine conundrum)"
+(add-function :around (symbol-function 'gnus-summary-exit)
+              (lambda (f &rest args)
+                (let ((gnus-summary-next-group-on-exit
+                       (if (nnhackernews--gate) nil
+                         gnus-summary-next-group-on-exit)))
+                  (apply f args))))
+(add-function :after (symbol-function 'gnus-summary-exit)
+              (symbol-function 'nnhackernews--score-pending))
+
+(add-function :before (symbol-function 'gnus-score-save)
+              (lambda (&rest _)
+                (when (nnhackernews--gate)
+                  (setq nnhackernews-score-files
+                        (assq-delete-all (intern gnus-newsgroup-name)
+                                         nnhackernews-score-files)))))
+
 ;; `gnus-newsgroup-p' requires valid method post-mail to return t
 (add-to-list 'gnus-valid-select-methods '("nnhackernews" post-mail) t)
 
@@ -1398,8 +1469,11 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
 (add-function
  :before-until (symbol-function 'message-make-from)
  (lambda (&rest _args)
-   (when (nnhackernews--gate)
-     (concat (nnhackernews--who-am-i) "@ycombinator.com"))))
+   (if (nnhackernews--gate)
+       (if-let ((whoami (nnhackernews--who-am-i)))
+           (concat whoami "@ycombinator.com")
+         (message-remove-header "from")
+         ""))))
 
 (add-function
  :around (symbol-function 'message-is-yours-p)
@@ -1472,6 +1546,15 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
       (aif gnus-uncacheable-groups
           (format "\\(%s\\)\\|\\(^nnhackernews\\)" it)
         "^nnhackernews"))
+
+(custom-set-variables
+ '(gnus-score-after-write-file-function
+   (lambda (file)
+     (when (nnhackernews--gate)
+       (unless (member file (alist-get (intern gnus-newsgroup-name)
+                                       nnhackernews-score-files))
+         (push file (alist-get (intern gnus-newsgroup-name)
+                               nnhackernews-score-files)))))))
 
 ;; (push '((and (eq (car gnus-current-select-method) 'nnhackernews)
 ;;              (eq mark gnus-unread-mark)
