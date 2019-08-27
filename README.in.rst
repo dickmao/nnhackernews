@@ -1,8 +1,8 @@
 |build-status|
 
-  Procrastination can be a full-time job.
-
 .. COMMENTARY (see Makefile)
+
+  Procrastination can be a full-time job.
 
 .. |build-status|
    image:: https://travis-ci.org/dickmao/nnhackernews.svg?branch=master
