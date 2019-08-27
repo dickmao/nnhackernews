@@ -41,19 +41,21 @@ In your ``.gnus`` or ``.emacs``,
    (add-to-list 'gnus-secondary-select-methods
                 '(nnhackernews ""))
 
-Enter the ``nnhackernews:news`` newsgroup with ``RET``.  Rapidly catch yourself up via ``N`` and ``P``.  Instantly catch-up with ``c``.
+Enter the ``nnhackernews:news`` newsgroup with ``RET``.
+
+Gnus will only show followup comments for threads you read, so be selective.  If you accidentally read a thread, or decide the thread is uninteresting, you may ``C-k`` it to prevent Gnus from showing followups.  Use ``C-k`` liberally.
+
+When finished, "catch-up" via ``c`` to flush the unread threads.  Gnus will not show followups for them.
 
 Create a post via ``a``.
 
 Reply to articles with ``f`` or ``r``.  Include original with ``F``.
 
-Vote articles by first entering the Article buffer, then ``R -`` (down), ``R =`` (up), or ``R 0`` (retract).
+Vote articles by ``R =`` (up), or ``R 0`` (retract).
 
-From the ``*Group*`` buffer, press ``g`` to refresh all subreddits.  ``M-g`` on a particular subreddit to refresh individually.
+From the ``*Group*`` buffer, press ``g`` to refresh all groups.  ``M-g`` on a particular group to refresh individually.
 
 From the summary buffer, ``/o`` redisplays articles already read.  ``x`` undisplays them.
-
-``S s`` edits articles.
 
 ``S c`` cancels articles.
 
