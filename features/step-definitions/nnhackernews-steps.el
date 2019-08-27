@@ -1,3 +1,7 @@
+(When "^I examine$"
+      (lambda ()
+        (should (message-is-yours-p))))
+
 (When "^of-record unreads for \"\\(.+\\)\" is \\([.0-9]+\\)$"
       (lambda (group count)
         (should (= (string-to-number count) (gnus-group-unread group)))))

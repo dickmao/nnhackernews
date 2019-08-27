@@ -42,7 +42,24 @@
 (defvar scenario-recording-alist '((touched nil)))
 (defvar scenario-recording-p t)
 
+(defun gen-key (sym alist)
+  "If SYM is already in ALIST, check if 1-SYM is present...
+
+And if so, 2-SYM, etc. until (N-1)-SYM, then return N-SYM."
+  (cl-loop with occur = 0
+           for cand = (intern (concat (if (zerop occur) "" (format "%d-" occur)) (symbol-name sym)))
+           unless (gnus-score-get cand alist)
+             return cand
+           end
+           do (cl-incf occur)))
+
 (Setup
+ (add-function
+  :after (symbol-function 'nnhackernews--request-login)
+  (lambda (&rest _)
+    (unless scenario-recording-p
+      (fset 'nnhackernews--get-user-cookie (lambda () "dickmao")))))
+
  (add-function
   :filter-args (symbol-function 'nnhackernews--request)
   (lambda (args)
@@ -52,7 +69,10 @@
              (fun1 (cl-function
                     (lambda (&rest args &key data &allow-other-keys)
                       (gnus-score-set (intern url)
-                                      (list data)
+                                      (append (gnus-score-get
+                                               (intern url)
+                                               scenario-recording-alist)
+                                              (list data))
                                       scenario-recording-alist)))))
         (setq args (plist-put
                     args :success
@@ -66,9 +86,13 @@
   (lambda (caller url &rest args)
     (unless scenario-recording-p
       (let* ((fun0 (plist-get args :success))
-             (plst (or (car (gnus-score-get (intern url) scenario-recording-alist))
-                       (error "nnhackernews--request-item: could not playback %s" url))))
-        (funcall fun0 :data plst)))))
+             (values (gnus-score-get (intern url) scenario-recording-alist))
+             (plst (car values)))
+        (if plst
+            (progn
+              (gnus-score-set (intern url) (cdr values) scenario-recording-alist)
+              (funcall fun0 :data plst :response (make-request-response :url url)))
+          (error "nnhackernews--request-item: could not playback %s" url))))))
 
  (add-function
   :filter-args (symbol-function 'nnhackernews--incoming)
@@ -91,6 +115,10 @@
        '(20784968
          (20784964 20784962 20784961 20784957 20784944 20784900 20784892
                    20784881 20784878 20784877 20784864)))
+      (5
+       '(20803854
+         (20803845 20803828 20803817 20803795 20803793 20803790 20803781
+                   20803777 20803774 20803767 20803764 20803737)))
       (_ (error "Unprepared for iteration %s" incoming-iteration))))))
 
 (defmacro with-scenario (scenario &rest body)

@@ -22,8 +22,12 @@ README.rst: README.in.rst nnhackernews.el
 	    | tools/readme-sed.sh "COMMENTARY" README.rst0 > README.rst
 	rm -f README.rst0 README.rst1
 
+.PHONY: test-clean
+test-clean:
+	rm -rf tests/.emacs* tests/.newsrc* tests/Mail tests/News tests/request tests/request-log
+
 .PHONY: clean
-clean:
+clean: test-clean
 	cask clean-elc
 	rm -f tests/log/*
 	rm -rf tests/test-install
@@ -71,8 +75,7 @@ test-unit:
 test: test-compile test-unit test-int
 
 .PHONY: test-int
-test-int:
-	rm -rf tests/.newsrc* tests/Mail tests/News tests/request
+test-int: test-clean
 	cask exec ecukes --reporter magnars --debug
 
 .PHONY: dist-clean

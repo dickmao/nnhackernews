@@ -41,4 +41,40 @@ Scenario: reply not having logged in yet
   Then I should be in buffer "*Summary nnhackernews:news*"
   And I go to word "LeifCarrot"
   And I press "r"
-  Then I should be in buffer "what what"
+  Then I should be in buffer "*unsent followup to LeifCarrotson on news*"
+  And I type "This is a test."
+  And I press "C-c C-c"
+  And I switch to buffer "*sent followup to LeifCarrotson on news*"
+  Then I should be in buffer "*sent followup to LeifCarrotson on news*"
+
+@delete
+Scenario: delete
+  When I switch to buffer "*Summary nnhackernews:news*"
+  And I press "c y"
+  Then I should be in buffer "*Group*"
+  And I dump buffer
+  And I scan news
+  When I go to word "nnhackernews:news"
+  And I press "RET"
+  Then I should be in buffer "*Summary nnhackernews:news*"
+  And I go to word "dickmao"
+  And I press "RET"
+  And I press "S c"
+
+@vote_reply_login
+Scenario: vote (and login) and reply having already logged in
+  Then I should be in buffer "*Summary nnhackernews:news*"
+  And I go to word "ceejayoz"
+  And I press "RET"
+  And I press "R ="
+  And I press "C-x o"
+  Then I should see "Score: 0 +1"
+  And I press "R 0"
+  Then I should not see "Score: 0 +1"
+  When I switch to buffer "*Summary nnhackernews:news*"
+  And I press "r"
+  Then I should be in buffer "*unsent followup to ceejayoz on news*"
+  And I type "This is a test."
+  And I press "C-c C-c"
+  And I switch to buffer "*sent followup to ceejayoz on news*"
+  Then I should be in buffer "*sent followup to ceejayoz on news*"

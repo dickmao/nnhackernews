@@ -132,16 +132,24 @@ Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtab
        func)
     ,table))
 
-;; keymaps made by `define-prefix-command' in `gnus-define-keys-1'
-(defvar nnhackernews-article-mode-map)
+(defvar nnhackernews-summary-voting-map
+  (let ((map (make-sparse-keymap)))
+    map)
+  "Voting map.")
 
-;; keymaps I make myself
 (defvar nnhackernews-summary-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map "r" 'gnus-summary-followup)
-    (define-key map "R" 'gnus-summary-followup-with-original)
-    (define-key map "F" 'gnus-summary-followup-with-original)
+    (define-prefix-command 'nnhackernews-summary-voting-map)
+    (define-key map "R" 'nnhackernews-summary-voting-map)
+    (define-key nnhackernews-summary-voting-map "0" 'nnhackernews-novote)
+    (define-key nnhackernews-summary-voting-map "-" 'nnhackernews-downvote)
+    (define-key nnhackernews-summary-voting-map "=" 'nnhackernews-upvote)
+    (define-key nnhackernews-summary-voting-map "+" 'nnhackernews-upvote)
     map))
+
+(defvar nnhackernews-article-mode-map
+  (copy-keymap nnhackernews-summary-mode-map)) ;; how does Gnus do this?
 
 (define-minor-mode nnhackernews-article-mode
   "Minor mode for nnhackernews articles.  Disallow `gnus-article-reply-with-original'.
@@ -149,14 +157,7 @@ Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtab
 \\{gnus-article-mode-map}
 "
   :lighter " HN"
-  :keymap gnus-article-mode-map
-
-  (when nnhackernews-article-mode
-    (gnus-define-keys (nnhackernews-article-mode-map "R" gnus-article-mode-map)
-      "0" nnhackernews-novote
-      "-" nnhackernews-downvote
-      "=" nnhackernews-upvote
-      "+" nnhackernews-upvote)))
+  :keymap nnhackernews-article-mode-map)
 
 (define-minor-mode nnhackernews-summary-mode
   "Disallow \"reply\" commands in `gnus-summary-mode-map'.
@@ -288,11 +289,17 @@ If NOQUERY, return nil and avoid querying if not extant."
                    until result
                    finally return result)))))
 
+(defsubst nnhackernews--domify (html)
+  "Parse HTML into dom."
+  (with-temp-buffer
+    (insert html)
+    (when (fboundp 'libxml-parse-html-region)
+      (libxml-parse-html-region (point-min) (point-max)))))
+
 (defun nnhackernews--request-login (url &optional hidden)
   "Store a cookie from URL with HIDDEN plist."
   (let* (result
          (auth-source-do-cache nil)
-         (auth-source-debug 'trivia)
          (auth-source-creation-prompts '((user . "news.ycombinator.com user: ")
                                          (secret . "Password for %u: ")))
          (found (car (auth-source-search :max 1 :host "news.ycombinator.com" :require
@@ -311,13 +318,6 @@ If NOQUERY, return nil and avoid querying if not extant."
                            secret)))))
      :success (nnhackernews--callback result))
     result))
-
-(defsubst nnhackernews--domify (html)
-  "Parse HTML into dom."
-  (with-temp-buffer
-    (insert html)
-    (when (fboundp 'libxml-parse-html-region)
-      (libxml-parse-html-region (point-min) (point-max)))))
 
 (defmacro nnhackernews--extract-hidden (dom hidden)
   "Extract hidden tag-value pairs from DOM into plist HIDDEN."
@@ -350,6 +350,10 @@ login-p will always be true."
          hidden)
     (when login-p
       (setq dom (nnhackernews--domify (nnhackernews--request-login url))))
+    (when (string-match-p (regexp-quote "validation required") data)
+      (display-warning 'nnhackernews
+                       "Recaptcha required.  Please login via browser and try again.")
+      (error "Recaptcha required"))
     (nnhackernews--extract-hidden dom hidden)
     (unless hidden
       ;; I've seen "?comment" not redirecting to "?item", in which case
@@ -377,8 +381,13 @@ login-p will always be true."
 (defsubst nnhackernews--who-am-i ()
   "Get my Hacker News username."
   (let ((user-cookie (nnhackernews--get-user-cookie)))
-    (when (stringp user-cookie)
-        (car (split-string user-cookie "&")))))
+    (unless user-cookie
+      (nnhackernews--request-login (format "%s/login" nnhackernews-hacker-news-url))
+      (setq user-cookie (nnhackernews--get-user-cookie)))
+    (if (stringp user-cookie)
+        (car (split-string user-cookie "&"))
+      (gnus-message 3 "nnhackernews--who-am-i: failed to get user-cookie")
+      "error")))
 
 (defsubst nnhackernews--append-header (plst &optional group)
   "Update data structures for PLST \"header\".
@@ -397,20 +406,28 @@ If GROUP classification omitted, figure it out."
 
 (defun nnhackernews-vote-current-article (vote)
   "VOTE is +1, -1, 0."
-  (unless gnus-article-current (error "No current article"))
-  (let* ((header (nnhackernews--get-header
-                  (cdr gnus-article-current)
-                  (gnus-group-real-name (car gnus-article-current))))
-         (orig-score (format "%s" (plist-get header :score)))
-         (new-score (if (zerop vote) orig-score
-                      (concat orig-score " "
-                              (if (> vote 0) "+" "")
-                              (format "%s" vote)))))
-    (let ((inhibit-read-only t))
-      (nnheader-replace-header "score" new-score))
-    (unless (nnhackernews--request-vote (plist-get header :id) vote)
-      (gnus-message 5 "nnhackernews-vote-current-article: failed for %s"
-                    (plist-get header :id)))))
+  (unless gnus-newsgroup-name (error "No current newgroup"))
+  (if-let ((article-number (or (cdr gnus-article-current)
+                               (gnus-summary-article-number))))
+      (let* ((header (nnhackernews--get-header article-number
+                                           (gnus-group-real-name gnus-newsgroup-name)))
+             (orig-score (format "%s" (plist-get header :score)))
+             (new-score (if (zerop vote) orig-score
+                          (concat orig-score " "
+                                  (if (> vote 0) "+" "")
+                                  (format "%s" vote)))))
+        (save-excursion
+          (save-window-excursion
+            (with-current-buffer gnus-summary-buffer
+              (if (eq (gnus-summary-article-number) (cdr gnus-article-current))
+                  (if (nnhackernews--request-vote (plist-get header :id) vote)
+                      (with-current-buffer gnus-article-buffer
+                        (let ((inhibit-read-only t))
+                          (nnheader-replace-header "Score" new-score)))
+                    (gnus-message 5 "nnhackernews-vote-current-article: failed for %s"
+                                  (plist-get header :id)))
+                (message "Open the article before voting."))))))
+    (error "No current article")))
 
 (defsubst nnhackernews--gate (&optional group)
   "Apply our minor modes only when the following conditions hold for GROUP."
@@ -524,7 +541,7 @@ Originally written by Paul Issartel."
   (if-let ((files (alist-get (intern group) nnhackernews-score-files)))
       (condition-case nil
         (progn
-          (dolist (file files (gnus-score-score-files group))
+          (dolist (file files t)
             (gnus-score-load-score-alist file)))
         (error nil))
     t))
@@ -539,7 +556,9 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
              until ensured
              do (sleep-for 0 300)
              finally (unless ensured
-                       (gnus-message 2 "nnhackernews--rescore: Bad score files!")))
+                       (gnus-message 2 "nnhackernews--rescore: Bad score files %s!"
+                                     (alist-get (intern group)
+                                                nnhackernews-score-files))))
     (let* ((num-headers (length (nnhackernews-get-headers
                                  (gnus-group-real-name group))))
            (marks (gnus-info-marks (nth 2 (gnus-group-entry group))))
@@ -709,10 +728,13 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
                   (lambda (&key data response &allow-other-keys)
                     (let* ((dom (nnhackernews--domify data))
                            (form (alist-get 'form (alist-get 'body dom)))
-                           (url (request-response-url response)))
+                           (url (request-response-url response))
+                           hidden)
+                      (nnhackernews--extract-hidden dom hidden)
+                      (setq hidden (plist-put hidden :creating nil))
                       (when (string= "vote" (alist-get 'action (car form)))
                         (setq dom (nnhackernews--domify
-                                   (nnhackernews--request-login url))))
+                                   (nnhackernews--request-login url hidden))))
                       (let (result0)
                        (-tree-map-nodes
                         (lambda (x)
@@ -1347,6 +1369,7 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
     (nnhackernews-summary-mode)))
 
 ;; I believe I did try buffer-localizing hooks, and it wasn't sufficient
+(add-hook 'gnus-article-mode-hook 'nnhackernews-article-mode-activate)
 (add-hook 'gnus-summary-mode-hook 'nnhackernews-summary-mode-activate)
 
 ;; Avoid having to select the GROUP to make the unread number go down.
@@ -1368,14 +1391,6 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                              ,nnhackernews--group-job
                              ,nnhackernews--group-stories)))
           t)
-
-;; `message-send-news' avoid "There is no From line."
-(add-hook 'message-header-hook
-          (lambda () (unless (message-fetch-field "from")
-                       (save-restriction
-                         (widen)
-                         (message-carefully-insert-headers
-                          (list (cons 'from "tbd@ycombinator.com")))))))
 
 ;; "Can't figure out hook that can remove itself (quine conundrum)"
 (add-function :around (symbol-function 'gnus-summary-exit)
@@ -1469,11 +1484,8 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
 (add-function
  :before-until (symbol-function 'message-make-from)
  (lambda (&rest _args)
-   (if (nnhackernews--gate)
-       (if-let ((whoami (nnhackernews--who-am-i)))
-           (concat whoami "@ycombinator.com")
-         (message-remove-header "from")
-         ""))))
+   (when (nnhackernews--gate)
+     (concat (nnhackernews--who-am-i) "@ycombinator.com"))))
 
 (add-function
  :around (symbol-function 'message-is-yours-p)

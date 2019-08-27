@@ -22,6 +22,7 @@
  '(gnus-message-highlight-citation nil)
  '(gnus-verbose 8)
  '(request-log-level (quote debug))
+ '(auth-source-debug 'trivia)
  '(gnus-large-ephemeral-newsgroup 4000)
  '(gnus-large-newsgroup 4000)
  '(gnus-interactive-exit (quote quiet)))
