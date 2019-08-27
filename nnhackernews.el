@@ -348,16 +348,14 @@ login-p will always be true."
          (path (car (url-path-and-query (url-generic-parse-url url))))
          (login-p (aif (alist-get 'action form) (cl-search it path)))
          hidden)
+    (nnhackernews--extract-hidden dom hidden)
     (when login-p
-      (setq dom (nnhackernews--domify (nnhackernews--request-login url))))
-    (when (string-match-p (regexp-quote "validation required") data)
-      (display-warning 'nnhackernews
-                       "Recaptcha required.  Please login via browser and try again.")
-      (error "Recaptcha required"))
+      (setq dom (nnhackernews--domify (nnhackernews--request-login url hidden))))
     (nnhackernews--extract-hidden dom hidden)
     (unless hidden
       ;; I've seen "?comment" not redirecting to "?item", in which case
       ;; there's no hidden information.  Force things here.
+      ;; Later: Probably because you didn't pass in HIDDEN to --request-login
       (let ((url (replace-regexp-in-string path  "/item" url))
             result)
         (nnhackernews--request
@@ -689,9 +687,26 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
   "Prefix errors with CALLER when executing synchronous request to URL."
   (unless parser
     (setq attributes (nconc attributes (list :parser #'buffer-string))))
-  (setq attributes (cl-loop for (k v) on attributes by (function cddr)
-                            unless (eq k :backend)
-                            collect k and collect v))
+  (setq attributes
+        (cl-loop for (k v) on attributes by (function cddr)
+                 for check-v = nil
+                 if (eq k :success)
+                   do (setq check-v
+                        (cl-function (lambda (&rest args &key data &allow-other-keys)
+                            (when (and (stringp data)
+                                       (string-match-p
+                                        (regexp-quote "validation required") data))
+                              (display-warning
+                               'nnhackernews
+                               (concat "Recaptcha required.  "
+                                       "Please login via browser "
+                                       "and try again."))
+                              (error "Recaptcha required"))
+                            (apply v args))))
+                 end
+                 unless (eq k :backend)
+                   collect k and collect (or check-v v)
+                 end))
   (let ((request-backend backend))
     (apply #'request url
            :sync t
@@ -814,34 +829,49 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
   (gnus-message 3 "%s %s: http status %s, %s" caller symbol-status response-status
                 (error-message-string error-thrown)))
 
-(defun nnhackernews--request-submit-link (url title link hidden)
-  "Submit to URL the TITLE with LINK and HIDDEN."
-  (nnhackernews--enforce-curl)
-  (let (result)
-    (nnhackernews--request
-     "nnhackernews--request-submit-link"
-     url
-     :backend 'curl
-     :data (append (cl-loop for (k v) on hidden by (function cddr)
-                            collect (cons (cl-subseq (symbol-name k) 1) v))
-                   `(("title" . ,title)
-                     ("url" . ,link)))
-     :success (nnhackernews--callback result))
+(cl-defun nnhackernews--request-submit-success (&key data response &allow-other-keys)
+  "If necessary, login, then \"goto\" fields take us to target."
+  (let* ((dom (nnhackernews--domify data))
+         (form (car (alist-get 'form (alist-get 'body dom))))
+         (url (request-response-url response))
+         (path (car (url-path-and-query (url-generic-parse-url url))))
+         (login-p (aif (alist-get 'action form) (cl-search it path)))
+         (result data))
+    (when login-p
+      (let (hidden)
+        (nnhackernews--extract-hidden dom hidden)
+        (setq result (nnhackernews--request-login url hidden))))
     result))
 
-(defun nnhackernews--request-submit-text (url text hidden)
-  "Submit to URL the TEXT with HIDDEN credentials."
+(defun nnhackernews--request-submit (caller url data hidden)
+  "Submit from CALLER to URL the DATA with HIDDEN credentials.
+
+Factor out commonality between text and link submit."
   (nnhackernews--enforce-curl)
   (let (result)
     (nnhackernews--request
-     "nnhackernews--request-submit-text"
+     caller
      url
      :backend 'curl
      :data (append (cl-loop for (k v) on hidden by (function cddr)
                             collect (cons (cl-subseq (symbol-name k) 1) v))
-                   `(("text" . ,text)))
-     :success (nnhackernews--callback result))
+                   data)
+     :success (nnhackernews--callback result #'nnhackernews--request-submit-success))
     result))
+
+(defsubst nnhackernews--request-submit-link (url title link hidden)
+  "Submit to URL the TITLE with LINK and HIDDEN."
+  (nnhackernews--request-submit "nnhackernews--request-submit-link"
+                                       url
+                                       `(("title" . ,title) ("url" . ,link))
+                                       hidden))
+
+(defsubst nnhackernews--request-submit-text (url text hidden)
+  "Submit to URL the TEXT with HIDDEN credentials."
+  (nnhackernews--request-submit "nnhackernews--request-submit-text"
+                                       url
+                                       `(("text" . ,text))
+                                       hidden))
 
 (defun nnhackernews--request-item (id)
   "Retrieve ID as a property list."
