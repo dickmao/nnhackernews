@@ -296,6 +296,18 @@ If NOQUERY, return nil and avoid querying if not extant."
     (when (fboundp 'libxml-parse-html-region)
       (libxml-parse-html-region (point-min) (point-max)))))
 
+(cl-defun nnhackernews--request-login-success (&key data &allow-other-keys)
+  "After some time, logging in via browser recaptcha might be necessary.
+
+Remember `string-match-p' is always case-insensitive as is all elisp pattern matching."
+  (when (and (stringp data)
+             (string-match-p (regexp-quote "validation required") data))
+    (display-warning
+     'nnhackernews
+     (concat "Recaptcha required.  Please login via browser and try again."))
+    (error "Recaptcha required"))
+  data)
+
 (defun nnhackernews--request-login (url &optional hidden)
   "Store a cookie from URL with HIDDEN plist."
   (let* (result
@@ -316,7 +328,7 @@ If NOQUERY, return nil and avoid querying if not extant."
                          (if (functionp secret)
                              (funcall secret)
                            secret)))))
-     :success (nnhackernews--callback result))
+     :success (nnhackernews--callback result #'nnhackernews--request-login-success))
     result))
 
 (defmacro nnhackernews--extract-hidden (dom hidden)
@@ -325,10 +337,13 @@ If NOQUERY, return nil and avoid querying if not extant."
     (lambda (x)
       (and (listp x)
            (eq (car x) 'input)
-           (string= "hidden" (alist-get 'type (cl-second x)))))
+           (string= "hidden" (alist-get 'type (cl-second x)))
+           (not (string= "creating" (alist-get 'name (cl-second x))))))
     (lambda (x)
-      (!cons (alist-get 'value (cl-second x)) ,hidden)
-      (!cons (intern (concat ":" (alist-get 'name (cl-second x)))) ,hidden))
+      (let ((keyname (intern (concat ":" (alist-get 'name (cl-second x))))))
+        (unless (plist-get ,hidden keyname)
+          (!cons (alist-get 'value (cl-second x)) ,hidden)
+          (!cons keyname ,hidden))))
     ,dom))
 
 (cl-defun nnhackernews--request-hidden-success (&key data response &allow-other-keys)
@@ -338,6 +353,7 @@ Case 1: We're not logged in.  We'll trigger `login-p`, which should
 take us to the `item?id=ID` page with the required hiddens.
 
 Case 2: We're logged in.  We'll get sent to the frontpage without hiddens.
+** Later: Probably because you didn't pass in HIDDEN to --request-login **
 We'll need to replace `comment?id=ID` with `item?id=ID` to get them.
 
 We can't just use `item?id=ID` from the start because then
@@ -686,27 +702,11 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
                                  &allow-other-keys)
   "Prefix errors with CALLER when executing synchronous request to URL."
   (unless parser
-    (setq attributes (nconc attributes (list :parser #'buffer-string))))
+    (setq attributes (append attributes (list :parser #'buffer-string))))
   (setq attributes
         (cl-loop for (k v) on attributes by (function cddr)
-                 for check-v = nil
-                 if (eq k :success)
-                   do (setq check-v
-                        (cl-function (lambda (&rest args &key data &allow-other-keys)
-                            (when (and (stringp data)
-                                       (string-match-p
-                                        (regexp-quote "validation required") data))
-                              (display-warning
-                               'nnhackernews
-                               (concat "Recaptcha required.  "
-                                       "Please login via browser "
-                                       "and try again."))
-                              (error "Recaptcha required"))
-                            (apply v args))))
-                 end
                  unless (eq k :backend)
-                   collect k and collect (or check-v v)
-                 end))
+                 collect k and collect v))
   (let ((request-backend backend))
     (apply #'request url
            :sync t
@@ -746,19 +746,18 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
                            (url (request-response-url response))
                            hidden)
                       (nnhackernews--extract-hidden dom hidden)
-                      (setq hidden (plist-put hidden :creating nil))
                       (when (string= "vote" (alist-get 'action (car form)))
                         (setq dom (nnhackernews--domify
                                    (nnhackernews--request-login url hidden))))
                       (let (result0)
-                       (-tree-map-nodes
-                        (lambda (x)
-                          (and (listp x)
-                               (eq (car x) 'a)
-                               (string= after (alist-get 'id (cl-second x)))))
-                        (lambda (_x) (setq result0 t))
-                        dom)
-                       result0)))))))
+                        (-tree-map-nodes
+                         (lambda (x)
+                           (and (listp x)
+                                (eq (car x) 'a)
+                                (string= after (alist-get 'id (cl-second x)))))
+                         (lambda (_x) (setq result0 t))
+                         dom)
+                        result0)))))))
     result))
 
 (defun nnhackernews--request-vote (item vote)
@@ -829,8 +828,11 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
   (gnus-message 3 "%s %s: http status %s, %s" caller symbol-status response-status
                 (error-message-string error-thrown)))
 
-(cl-defun nnhackernews--request-submit-success (&key data response &allow-other-keys)
-  "If necessary, login, then \"goto\" fields take us to target."
+(cl-defun nnhackernews--request-submit-success
+    (caller posturl postdata retry &key data response &allow-other-keys)
+  "If necessary, login, then \"goto\" fields take us to target.
+
+And if accused of being a bot, retry with CALLER, POSTURL, POSTDATA (and toggle RETRY)."
   (let* ((dom (nnhackernews--domify data))
          (form (car (alist-get 'form (alist-get 'body dom))))
          (url (request-response-url response))
@@ -841,37 +843,55 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
       (let (hidden)
         (nnhackernews--extract-hidden dom hidden)
         (setq result (nnhackernews--request-login url hidden))))
+    (-tree-map-nodes
+     (lambda (x)
+       (and (listp x)
+            (eq (car x) 'td)
+            (stringp (cl-third x))
+            (string-match-p (regexp-quote "try again") (cl-third x))))
+     (lambda (_x)
+       (if retry
+           (let (hidden)
+             (nnhackernews--extract-hidden dom hidden)
+             (setq result (nnhackernews--request-submit caller posturl postdata hidden nil)))
+         (setq result nil)
+         (setq nnhackernews-status-string "Retried and failed")))
+     dom)
     result))
 
-(defun nnhackernews--request-submit (caller url data hidden)
-  "Submit from CALLER to URL the DATA with HIDDEN credentials.
+(defun nnhackernews--request-submit (caller posturl postdata hidden retry)
+  "Submit from CALLER to POSTURL the POSTDATA with HIDDEN credentials.
 
+Bool RETRY is non-nil on first attempt.
 Factor out commonality between text and link submit."
   (nnhackernews--enforce-curl)
   (let (result)
     (nnhackernews--request
      caller
-     url
+     posturl
      :backend 'curl
      :data (append (cl-loop for (k v) on hidden by (function cddr)
                             collect (cons (cl-subseq (symbol-name k) 1) v))
-                   data)
-     :success (nnhackernews--callback result #'nnhackernews--request-submit-success))
+                   postdata)
+     :success (nnhackernews--callback
+               result
+               (apply-partially #'nnhackernews--request-submit-success
+                                caller posturl postdata retry)))
     result))
 
 (defsubst nnhackernews--request-submit-link (url title link hidden)
-  "Submit to URL the TITLE with LINK and HIDDEN."
+  "Submit to URL the TITLE with LINK and HIDDEN credentials."
   (nnhackernews--request-submit "nnhackernews--request-submit-link"
-                                       url
-                                       `(("title" . ,title) ("url" . ,link))
-                                       hidden))
+                                url
+                                `(("title" . ,title) ("url" . ,link) ("text" . ""))
+                                hidden t))
 
-(defsubst nnhackernews--request-submit-text (url text hidden)
-  "Submit to URL the TEXT with HIDDEN credentials."
+(defsubst nnhackernews--request-submit-text (url title text hidden)
+  "Submit to URL the TITLE with TEXT and HIDDEN credentials."
   (nnhackernews--request-submit "nnhackernews--request-submit-text"
-                                       url
-                                       `(("text" . ,text))
-                                       hidden))
+                                url
+                                `(("title" . ,title) ("url" . "") ("text" . ,text))
+                                hidden t))
 
 (defun nnhackernews--request-item (id)
   "Retrieve ID as a property list."
@@ -1229,13 +1249,17 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                  (unless ret (nnhackernews--set-status-string dom)))))
             (link
              (let* ((parsed-url (url-generic-parse-url link))
-                    (host (url-host parsed-url)))
+                    (host (url-host parsed-url))
+                    (path (car (url-path-and-query (url-generic-parse-url url))))
+                    (url (replace-regexp-in-string path "/r" url)))
                (if (and (stringp host) (not (zerop (length host))))
-                   (nnhackernews--request-submit-link url title link hidden)
+                   (setq ret (nnhackernews--request-submit-link url title link hidden))
                  (gnus-message 3 "nnhackernews-request-post: invalid url \"%s\"" link)
                  (setq ret nil))))
             (t
-             (nnhackernews--request-submit-text url body hidden)))
+             (let* ((path (car (url-path-and-query (url-generic-parse-url url))))
+                    (url (replace-regexp-in-string path "/r" url)))
+               (setq ret (nnhackernews--request-submit-text url title body hidden)))))
       ret)))
 
 (defun nnhackernews--browse-story (&rest _args)

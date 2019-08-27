@@ -78,3 +78,17 @@ Scenario: vote (and login) and reply having already logged in
   And I press "C-c C-c"
   And I switch to buffer "*sent followup to ceejayoz on news*"
   Then I should be in buffer "*sent followup to ceejayoz on news*"
+
+@submit
+Scenario: submit a text which must be titled
+  When I switch to buffer "*Summary nnhackernews:news*"
+  And I press "a t"
+  Then I should be in buffer "*unsent posting on news*"
+  And I type "test baby test baby 123"
+  And I press "M->"
+  And I type "this is a test"
+  And I dump buffer
+  And I press "C-c C-c"
+  Then I should be in buffer "*Summary nnhackernews:news*"
+  When I switch to buffer "*Messages*"
+  Then I should not see "Couldn't send message via news"
