@@ -1,8 +1,8 @@
 |build-status|
 
-A Gnus backend for Hacker News.
-
   Procrastination can be a full-time job.
+
+A Gnus backend for Hacker News.
 
 .. |build-status|
    image:: https://travis-ci.org/dickmao/nnhackernews.svg?branch=master
