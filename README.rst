@@ -1,6 +1,6 @@
 |build-status|
 
-  --- Procrastination can be a full-time job.
+  Procrastination can be a full-time job.
 
 A Gnus backend for Hacker News.
 
