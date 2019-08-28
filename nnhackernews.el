@@ -347,17 +347,7 @@ Remember `string-match-p' is always case-insensitive as is all elisp pattern mat
     ,dom))
 
 (cl-defun nnhackernews--request-hidden-success (&key data response &allow-other-keys)
-  "If necessary, login first, then return plist of :fnid and :fnop.
-
-Case 1: We're not logged in.  We'll trigger `login-p`, which should
-take us to the `item?id=ID` page with the required hiddens.
-
-Case 2: We're logged in.  We'll get sent to the frontpage without hiddens.
-** Later: Probably because you didn't pass in HIDDEN to --request-login **
-We'll need to replace `comment?id=ID` with `item?id=ID` to get them.
-
-We can't just use `item?id=ID` from the start because then
-login-p will always be true."
+  "If necessary, login first, then return plist of :fnid and :fnop."
   (let* ((dom (nnhackernews--domify data))
          (form (car (alist-get 'form (alist-get 'body dom))))
          (url (request-response-url response))
@@ -368,18 +358,6 @@ login-p will always be true."
     (when login-p
       (setq dom (nnhackernews--domify (nnhackernews--request-login url hidden))))
     (nnhackernews--extract-hidden dom hidden)
-    (unless hidden
-      ;; I've seen "?comment" not redirecting to "?item", in which case
-      ;; there's no hidden information.  Force things here.
-      ;; Later: Probably because you didn't pass in HIDDEN to --request-login
-      (let ((url (replace-regexp-in-string path  "/item" url))
-            result)
-        (nnhackernews--request
-         "nnhackernews--request-hidden-success"
-         url
-         :success (nnhackernews--callback result))
-        (setq dom (nnhackernews--domify result))
-        (nnhackernews--extract-hidden dom hidden)))
     hidden))
 
 (defun nnhackernews--request-hidden (url)
