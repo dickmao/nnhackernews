@@ -29,6 +29,9 @@
 
 ;;; Code:
 
+(eval-when-compile (require 'cl-lib)
+                   (cl-assert (fboundp 'libxml-parse-html-region)))
+
 (require 'nnoo)
 (require 'gnus)
 (require 'gnus-start)
@@ -293,8 +296,9 @@ If NOQUERY, return nil and avoid querying if not extant."
   "Parse HTML into dom."
   (with-temp-buffer
     (insert html)
-    (when (fboundp 'libxml-parse-html-region)
-      (libxml-parse-html-region (point-min) (point-max)))))
+    (if (fboundp 'libxml-parse-html-region)
+        (libxml-parse-html-region (point-min) (point-max))
+      (error "nnhackernews--domify: need libxml-parse-html-region"))))
 
 (cl-defun nnhackernews--request-login-success (&key data &allow-other-keys)
   "After some time, logging in via browser recaptcha might be necessary.
