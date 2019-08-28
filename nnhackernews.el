@@ -356,8 +356,8 @@ Remember `string-match-p' is always case-insensitive as is all elisp pattern mat
          hidden)
     (nnhackernews--extract-hidden dom hidden)
     (when login-p
-      (setq dom (nnhackernews--domify (nnhackernews--request-login url hidden))))
-    (nnhackernews--extract-hidden dom hidden)
+      (setq dom (nnhackernews--domify (nnhackernews--request-login url hidden)))
+      (nnhackernews--extract-hidden dom hidden))
     hidden))
 
 (defun nnhackernews--request-hidden (url)
