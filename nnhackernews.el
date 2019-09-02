@@ -640,31 +640,6 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
     (nnhackernews--score-unread group))
   t)
 
-(defun nnhackernews-pare-history (&optional to-len)
-  "Truncate headers to TO-LEN."
-  (interactive "nPare to length: ")
-  (unless (numberp to-len)
-    (setq to-len nnhackernews-pare-length))
-  (nnhackernews--maphash
-   (lambda (group headers)
-     (let* ((olen (length headers))
-            (_ (nnhackernews--replace-hash
-                group (lambda (_v) (-take-last to-len headers))
-                nnhackernews-headers-hashtb))
-            (nlen (length (nnhackernews-get-headers group)))
-            (delta (- olen nlen)))
-       (when (> delta 0)
-         (nnhackernews--maphash
-          (lambda (id location)
-            (when (string= group (car location))
-              (let ((nindex (- (cdr location) delta)))
-                (if (>= nindex 0)
-                    (setcdr location nindex)
-                  (nnhackernews--remhash id nnhackernews-location-hashtb)))))
-          nnhackernews-location-hashtb))))
-   nnhackernews-headers-hashtb)
-  (nnhackernews--checksum))
-
 (defun nnhackernews--checksum ()
   "Ensure header tallies agree.
 
