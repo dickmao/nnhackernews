@@ -80,11 +80,6 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
   :type 'integer
   :group 'nnhackernews)
 
-(defcustom nnhackernews-pare-length 1000
-  "Truncate headers to this length on `nnhackernews-pare-headers'."
-  :type 'integer
-  :group 'nnhackernews)
-
 (defvoo nnhackernews-status-string "")
 
 (defvar nnhackernews--last-item nil "Keep track of where we are.")
