@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Keywords: news
 ;; URL: https://github.com/dickmao/nnhackernews
-;; Package-Requires: ((emacs "25") (request "20190819") (dash "20190401") (anaphora "20180618"))
+;; Package-Requires: ((emacs "25") (request "20190819") (dash "20190401") (dash-functional "20180107") (anaphora "20180618"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -50,6 +50,7 @@
 (require 'subr-x)
 (require 'request)
 (require 'dash)
+(require 'dash-functional)
 (require 'anaphora)
 (require 'url-http)
 
@@ -60,6 +61,14 @@
 (defconst nnhackernews--group-show "show")
 (defconst nnhackernews--group-job "job")
 (defconst nnhackernews--group-stories "news")
+
+(defcustom nnhackernews-pare-length 1000
+  "Delete old comments up to this value in `nnhackernews-pare-comments'."
+  :type 'integer
+  :group 'nnhackernews)
+
+(defconst nnhackernews-pare-message ""
+  "Message to display for deleted comments in `nnhackernews-pare-comments'.")
 
 (defcustom nnhackernews-render-story t
   "If non-nil, follow link upon `gnus-summary-select-article'.
@@ -490,7 +499,10 @@ If GROUP classification omitted, figure it out."
   (nnhackernews--normalize-server)
   (if-let ((url (plist-get header :url)))
       (format "<div><p><a href=\"%s\">%s</a></div>" url url)
-    (or (plist-get header :text) "")))
+    (let ((it (plist-get header :text)))
+      (if (equal it nnhackernews-pare-message)
+          (plist-get (nnhackernews--request-item (plist-get header :id)) :text)
+        it))))
 
 (defun nnhackernews--massage (body)
   "Precede each quoted line of BODY broken by `shr-fill-line' with '>'."
@@ -634,6 +646,36 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
     (gnus-message 5 "nnhackernews-request-group-scan: scanning %s...done" group)
     (nnhackernews--score-unread group))
   t)
+
+(defun nnhackernews-pare-comments (&optional to-len)
+  "Delete comments down to most recent TO-LEN comments."
+  (interactive "nDelete comments down to: ")
+  (unless (numberp to-len)
+    (setq to-len nnhackernews-pare-length))
+  (nnhackernews--maphash
+   (lambda (_group headers)
+     (cl-do* ((z (1- (- (length headers)
+                        (cl-loop with rheaders = (reverse headers)
+                                 for k from 0 below to-len
+                                 for next = (-find-index
+                                             (-rpartial 'plist-get :text)
+                                             rheaders)
+                                     then (when-let ((still (-find-index
+                                                             (-rpartial 'plist-get :text)
+                                                             (nthcdr (1+ next) rheaders))))
+                                            (1+ (+ next still)))
+                                 until (null next)
+                                 finally return (or next (1- (length headers)))))))
+              (i 0 (1+ i))
+              (plst (nth i headers) (nth i headers)))
+         ((>= i z))
+       (-when-let* ((j (-elem-index :text plst))
+                    (new-plst (-replace-at (1+ j) nnhackernews-pare-message plst)))
+         (if (zerop i)
+             (setcar headers new-plst)
+           (setcdr (nthcdr (1- i) headers) (cons new-plst (nthcdr (1+ i) headers)))))))
+   nnhackernews-headers-hashtb)
+  (nnhackernews--checksum))
 
 (defun nnhackernews--checksum ()
   "Ensure header tallies agree.
