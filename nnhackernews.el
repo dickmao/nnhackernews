@@ -143,13 +143,13 @@ Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtab
 
 (defvar nnhackernews-summary-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map "r" 'gnus-summary-followup)
+    (define-key map "r" #'gnus-summary-followup)
     (define-prefix-command 'nnhackernews-summary-voting-map)
     (define-key map "R" 'nnhackernews-summary-voting-map)
-    (define-key nnhackernews-summary-voting-map "0" 'nnhackernews-novote)
-    (define-key nnhackernews-summary-voting-map "-" 'nnhackernews-downvote)
-    (define-key nnhackernews-summary-voting-map "=" 'nnhackernews-upvote)
-    (define-key nnhackernews-summary-voting-map "+" 'nnhackernews-upvote)
+    (define-key nnhackernews-summary-voting-map "0" #'nnhackernews-novote)
+    (define-key nnhackernews-summary-voting-map "-" #'nnhackernews-downvote)
+    (define-key nnhackernews-summary-voting-map "=" #'nnhackernews-upvote)
+    (define-key nnhackernews-summary-voting-map "+" #'nnhackernews-upvote)
     map))
 
 (defvar nnhackernews-article-mode-map
@@ -1309,7 +1309,7 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs)."
           (if (> (length date) 0)
               (let*
                   ((then (nnhackernews--dense-time
-                          (apply 'encode-time (parse-time-string date))))
+                          (apply #'encode-time (parse-time-string date))))
                    (now (nnhackernews--dense-time (current-time)))
                    (diff (- now then))
                    (str
@@ -1406,8 +1406,8 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
     (nnhackernews-summary-mode)))
 
 ;; I believe I did try buffer-localizing hooks, and it wasn't sufficient
-(add-hook 'gnus-article-mode-hook 'nnhackernews-article-mode-activate)
-(add-hook 'gnus-summary-mode-hook 'nnhackernews-summary-mode-activate)
+(add-hook 'gnus-article-mode-hook #'nnhackernews-article-mode-activate)
+(add-hook 'gnus-summary-mode-hook #'nnhackernews-summary-mode-activate)
 
 ;; Avoid having to select the GROUP to make the unread number go down.
 (mapc (lambda (hook)
