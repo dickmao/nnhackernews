@@ -80,6 +80,11 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
   :type 'integer
   :group 'nnhackernews)
 
+(defcustom nnhackernews-pare-length 1000
+  "Truncate headers to this length on `nnhackernews-pare-headers'."
+  :type 'integer
+  :group 'nnhackernews)
+
 (defvoo nnhackernews-status-string "")
 
 (defvar nnhackernews--last-item nil "Keep track of where we are.")
@@ -115,6 +120,18 @@ Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtab
        (set (intern string hashtable) replace-with)
       (puthash string replace-with hashtable))))
 
+(defmacro nnhackernews--remhash (string hashtable)
+  "Remove STRING from HASHTABLE.
+
+Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtables."
+  `(,(if (fboundp 'gnus-sethash)
+         'unintern
+       'remhash)
+    ,(if (fboundp 'gnus-sethash)
+         (cons 'intern (list string hashtable))
+       string)
+     ,hashtable))
+
 (defmacro nnhackernews--sethash (string value hashtable)
   "Set corresponding value of STRING to VALUE in HASHTABLE.
 
@@ -125,14 +142,17 @@ Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtab
     ,string ,value ,hashtable))
 
 (defmacro nnhackernews--maphash (func table)
-  "Map FUNC over TABLE, return nil.
+  "Map FUNC taking key and value over TABLE, return nil.
 
 Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtables."
   `(,(if (fboundp 'gnus-gethash-safe)
          'mapatoms
        'maphash)
     ,(if (fboundp 'gnus-gethash-safe)
-         `(lambda (k) (funcall (apply-partially ,func (gnus-gethash-safe k ,table)) k))
+         `(lambda (k) (funcall
+                       (apply-partially
+                        ,func
+                        (symbol-name k) (gnus-gethash-safe k ,table))))
        func)
     ,table))
 
@@ -620,6 +640,60 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
     (nnhackernews--score-unread group))
   t)
 
+(defun nnhackernews-pare-history (&optional to-len)
+  "Truncate headers to TO-LEN."
+  (interactive "nPare to length: ")
+  (unless (numberp to-len)
+    (setq to-len nnhackernews-pare-length))
+  (nnhackernews--maphash
+   (lambda (group headers)
+     (let* ((olen (length headers))
+            (_ (nnhackernews--replace-hash
+                group (lambda (_v) (-take-last to-len headers))
+                nnhackernews-headers-hashtb))
+            (nlen (length (nnhackernews-get-headers group)))
+            (delta (- olen nlen)))
+       (when (> delta 0)
+         (nnhackernews--maphash
+          (lambda (id location)
+            (when (string= group (car location))
+              (let ((nindex (- (cdr location) delta)))
+                (if (>= nindex 0)
+                    (setcdr location nindex)
+                  (nnhackernews--remhash id nnhackernews-location-hashtb)))))
+          nnhackernews-location-hashtb))))
+   nnhackernews-headers-hashtb)
+  (nnhackernews--checksum))
+
+(defun nnhackernews--checksum ()
+  "Ensure header tallies agree.
+
+The two hashtables being reconciled are `nnhackernews-location-hashtb' and
+`nnhackernews-headers-hashtb'."
+  (let ((counts (gnus-make-hashtable)))
+    (nnhackernews--maphash
+     (lambda (_id group-index)
+       (nnhackernews--replace-hash (car group-index) (lambda (v) (1+ (or v 0)))
+                                   counts))
+     nnhackernews-location-hashtb)
+
+    (nnhackernews--maphash
+     (lambda (group headers)
+       (cl-assert (= (nnhackernews--gethash group counts 0)
+                      (length headers))
+                  nil
+                  "nnhackernews--checksum: %s, %s != %s"
+                  group (nnhackernews--gethash group counts 0)
+                  (length headers)))
+     nnhackernews-headers-hashtb)
+
+    (let (result)
+      (nnhackernews--maphash
+       (lambda (group count)
+         (push (cons group count) result))
+       counts)
+      result)))
+
 ;; gnus-group-select-group
 ;;   gnus-group-read-group
 ;;     gnus-summary-read-group
@@ -982,7 +1056,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                  (let ((result ""))
                    (nnhackernews--maphash
                     (lambda (key value)
-                      (setq result (concat result (format "%s +%s " value key))))
+                      (setq result (concat result (format "%s +%s " key value))))
                     counts)
                    result))))))
 
