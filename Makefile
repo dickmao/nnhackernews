@@ -9,7 +9,7 @@ ifeq ($(TRAVIS_PULL_REQUEST_BRANCH),)
 TRAVIS_PULL_REQUEST_BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 endif
 ifeq ($(TRAVIS_PULL_REQUEST_SHA),)
-TRAVIS_PULL_REQUEST_SHA := $(shell if git show-ref --quiet --verify origin/$(TRAVIS_PULL_REQUEST_BRANCH) ; then git rev-parse origin/$(TRAVIS_PULL_REQUEST_BRANCH) ; fi)
+TRAVIS_PULL_REQUEST_SHA := $(shell git rev-parse $(TRAVIS_PULL_REQUEST_BRANCH))
 endif
 
 .DEFAULT_GOAL := test-compile
