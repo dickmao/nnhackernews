@@ -502,7 +502,7 @@ If GROUP classification omitted, figure it out."
     (let ((it (plist-get header :text)))
       (if (equal it nnhackernews-pare-message)
           (plist-get (nnhackernews--request-item (plist-get header :id)) :text)
-        it))))
+        (or it "")))))
 
 (defun nnhackernews--massage (body)
   "Precede each quoted line of BODY broken by `shr-fill-line' with '>'."
