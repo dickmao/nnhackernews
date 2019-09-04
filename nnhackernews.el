@@ -62,14 +62,6 @@
 (defconst nnhackernews--group-job "job")
 (defconst nnhackernews--group-stories "news")
 
-(defcustom nnhackernews-pare-length 1000
-  "Delete old comments up to this value in `nnhackernews-pare-comments'."
-  :type 'integer
-  :group 'nnhackernews)
-
-(defconst nnhackernews-pare-message ""
-  "Message to display for deleted comments in `nnhackernews-pare-comments'.")
-
 (defcustom nnhackernews-render-story t
   "If non-nil, follow link upon `gnus-summary-select-article'.
 
@@ -149,6 +141,7 @@ Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtab
   "Map FUNC taking key and value over TABLE, return nil.
 
 Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtables."
+  (declare (indent nil))
   `(,(if (fboundp 'gnus-gethash-safe)
          'mapatoms
        'maphash)
@@ -499,10 +492,9 @@ If GROUP classification omitted, figure it out."
   (nnhackernews--normalize-server)
   (if-let ((url (plist-get header :url)))
       (format "<div><p><a href=\"%s\">%s</a></div>" url url)
-    (let ((it (plist-get header :text)))
-      (if (equal it nnhackernews-pare-message)
-          (plist-get (nnhackernews--request-item (plist-get header :id)) :text)
-        (or it "")))))
+    (or (plist-get header :text)
+        (plist-get (nnhackernews--request-item (plist-get header :id)) :text)
+        "")))
 
 (defun nnhackernews--massage (body)
   "Precede each quoted line of BODY broken by `shr-fill-line' with '>'."
@@ -647,36 +639,6 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
     (nnhackernews--score-unread group))
   t)
 
-(defun nnhackernews-pare-comments (&optional to-len)
-  "Delete comments down to most recent TO-LEN comments."
-  (interactive "nDelete comments down to: ")
-  (unless (numberp to-len)
-    (setq to-len nnhackernews-pare-length))
-  (nnhackernews--maphash
-   (lambda (_group headers)
-     (cl-do* ((z (1- (- (length headers)
-                        (cl-loop with rheaders = (reverse headers)
-                                 for k from 0 below to-len
-                                 for next = (-find-index
-                                             (-rpartial 'plist-get :text)
-                                             rheaders)
-                                     then (when-let ((still (-find-index
-                                                             (-rpartial 'plist-get :text)
-                                                             (nthcdr (1+ next) rheaders))))
-                                            (1+ (+ next still)))
-                                 until (null next)
-                                 finally return (or next (1- (length headers)))))))
-              (i 0 (1+ i))
-              (plst (nth i headers) (nth i headers)))
-         ((>= i z))
-       (-when-let* ((j (-elem-index :text plst))
-                    (new-plst (-replace-at (1+ j) nnhackernews-pare-message plst)))
-         (if (zerop i)
-             (setcar headers new-plst)
-           (setcdr (nthcdr (1- i) headers) (cons new-plst (nthcdr (1+ i) headers)))))))
-   nnhackernews-headers-hashtb)
-  (nnhackernews--checksum))
-
 (defun nnhackernews--checksum ()
   "Ensure header tallies agree.
 
@@ -692,7 +654,7 @@ The two hashtables being reconciled are `nnhackernews-location-hashtb' and
     (nnhackernews--maphash
      (lambda (group headers)
        (cl-assert (= (nnhackernews--gethash group counts 0)
-                      (length headers))
+                     (length headers))
                   nil
                   "nnhackernews--checksum: %s, %s != %s"
                   group (nnhackernews--gethash group counts 0)
@@ -1467,6 +1429,7 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                                   (gnus-cited-lines-visible '(2 . 2))
                                   (gnus-use-cache nil)
                                   (gnus-use-adaptive-scoring (quote (line)))
+                                  (total-expire . t)
                                   (gnus-newsgroup-adaptive t)
                                   (gnus-simplify-subject-functions (quote (gnus-simplify-subject-fuzzy)))
 
@@ -1485,6 +1448,18 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
   "Augment the `gnus-article-mode-map' conditionally."
   (when (nnhackernews--gate)
     (nnhackernews-article-mode)))
+
+(deffoo nnhackernews-request-expire-articles (articles &optional group server _force)
+  "Preserving indices so `nnhackernews-find-header' still works."
+  (nnhackernews--normalize-server)
+  (nnhackernews--with-group group
+    (dolist (art articles)
+      (let ((i (1- art))
+            (headers (nnhackernews-get-headers group)))
+        (if (zerop i)
+            (setcar headers nil)
+          (setcdr (nthcdr (1- i) headers) (cons nil (nthcdr (1+ i) headers))))))
+    (nnhackernews--checksum)))
 
 (defun nnhackernews-summary-mode-activate ()
   "Shadow some bindings in `gnus-summary-mode-map' conditionally."
