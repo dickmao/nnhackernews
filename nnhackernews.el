@@ -682,8 +682,12 @@ The two hashtables being reconciled are `nnhackernews-location-hashtb' and
   (nnhackernews--with-group group
     (let* ((info (or info (gnus-get-info gnus-newsgroup-name)))
            (headers (nnhackernews-get-headers group))
-           (num-headers (length headers))
-           (status (format "211 %d %d %d %s" num-headers 1 num-headers group)))
+           (first-header (1+ (or (-find-index #'identity headers) 0)))
+           (last-header (length headers))
+           (num-headers (if (> first-header last-header) 0
+                          (1+ (- last-header first-header))))
+           (status (format "211 %d %d %d %s"
+                           num-headers first-header last-header group)))
       (gnus-message 7 "nnhackernews-request-group: %s" status)
       (nnheader-insert "%s\n" status)
       (when info
@@ -1429,7 +1433,7 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                                   (gnus-cited-lines-visible '(2 . 2))
                                   (gnus-use-cache nil)
                                   (gnus-use-adaptive-scoring (quote (line)))
-                                  (total-expire . t)
+                                  ;; (total-expire . t)
                                   (gnus-newsgroup-adaptive t)
                                   (gnus-simplify-subject-functions (quote (gnus-simplify-subject-fuzzy)))
 
@@ -1459,7 +1463,8 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
         (if (zerop i)
             (setcar headers nil)
           (setcdr (nthcdr (1- i) headers) (cons nil (nthcdr (1+ i) headers))))))
-    (nnhackernews--checksum)))
+    (nnhackernews--checksum)
+    nil))
 
 (defun nnhackernews-summary-mode-activate ()
   "Shadow some bindings in `gnus-summary-mode-map' conditionally."
