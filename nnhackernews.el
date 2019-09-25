@@ -1147,7 +1147,8 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
     (mapc (lambda (group)
             (let ((full-name (gnus-group-full-name group `("nnhackernews" ,(or server "")))))
               (gnus-activate-group full-name t)
-              (gnus-group-unsubscribe-group full-name gnus-level-default-subscribed t))
+              (when (> (gnus-group-level full-name) gnus-level-subscribed)
+                (gnus-group-unsubscribe-group full-name gnus-level-default-subscribed t)))
             (insert (format "%s %d 1 y\n" group
                             (length (nnhackernews-get-headers group)))))
           `(,nnhackernews--group-ask
