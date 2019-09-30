@@ -89,6 +89,5 @@ Scenario: submit a text which must be titled
   And I type "this is a test"
   And I dump buffer
   And I press "C-c C-c"
-  Then I should be in buffer "*Summary nnhackernews:news*"
   When I switch to buffer "*Messages*"
   Then I should not see "Couldn't send message via news"

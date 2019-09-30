@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Keywords: news
 ;; URL: https://github.com/dickmao/nnhackernews
-;; Package-Requires: ((emacs "25") (request "20190819") (dash "20190401") (dash-functional "20180107") (anaphora "20180618"))
+;; Package-Requires: ((emacs "25.1") (request "20190819") (dash "20190401") (dash-functional "20180107") (anaphora "20180618"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -319,8 +319,9 @@ If NOQUERY, return nil and avoid querying if not extant."
       (error "nnhackernews--domify: need libxml-parse-html-region"))))
 
 (cl-defun nnhackernews--request-login-success (&key data &allow-other-keys)
-  "After some time, logging in via browser recaptcha might be necessary.
+  "Validate login depending on what DATA say.
 
+After some time, logging in via browser recaptcha might be necessary.
 Remember `string-match-p' is always case-insensitive as is all elisp pattern matching."
   (when (and (stringp data)
              (string-match-p (regexp-quote "validation required") data))
@@ -369,7 +370,7 @@ Remember `string-match-p' is always case-insensitive as is all elisp pattern mat
     ,dom))
 
 (cl-defun nnhackernews--request-hidden-success (&key data response &allow-other-keys)
-  "If necessary, login first, then return plist of :fnid and :fnop."
+  "Based on DATA and RESPONSE, we may need to login first.  Return :fnid and :fnop."
   (let* ((dom (nnhackernews--domify data))
          (form (car (alist-get 'form (alist-get 'body dom))))
          (url (request-response-url response))
@@ -577,7 +578,7 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
                                                 nnhackernews-score-files))))
     (let* ((num-headers (length (nnhackernews-get-headers
                                  (gnus-group-real-name group))))
-           (marks (gnus-info-marks (nth 2 (gnus-group-entry group))))
+           (marks (gnus-info-marks (gnus-get-info group)))
            (seen (or (cdr (--max-by (> (or (cdr it) 0) (or (cdr other) 0))
                                     (alist-get 'seen marks)))
                      0)))
@@ -735,7 +736,9 @@ The two hashtables being reconciled are `nnhackernews-location-hashtb' and
 (cl-defun nnhackernews--request (caller url
                                  &rest attributes &key parser (backend 'url-retrieve)
                                  &allow-other-keys)
-  "Prefix errors with CALLER when executing synchronous request to URL."
+  "Prefix errors with CALLER executing synchronous request to URL.
+
+Request shall contain ATTRIBUTES, one of which is PARSER of the response, if provided (shall default to verbatim dump of response, if not).  BACKEND can be curl (defaults to `url-retrieve')."
   (unless parser
     (setq attributes (append attributes (list :parser #'buffer-string))))
   (setq attributes
@@ -749,7 +752,7 @@ The two hashtables being reconciled are `nnhackernews-location-hashtb' and
            attributes)))
 
 (cl-defun nnhackernews--request-vote-success (item vote &key data &allow-other-keys)
-  "If necessary, login first, then locate vote link depending on VOTE sign."
+  "If necessary, login first, then locate ITEM VOTE link in DATA (will depend on VOTE sign)."
   (let* ((dom (nnhackernews--domify data))
          (before (format "%s_%s" (if (> vote 0) "up" "un") item))
          (after (format "%s_%s" (if (<= vote 0) "up" "un") item))
@@ -859,7 +862,9 @@ The two hashtables being reconciled are `nnhackernews-location-hashtb' and
                                        &allow-other-keys
                                        &aux (response-status
                                              (request-response-status-code response)))
-  "Refer to CALLER when reporting a submit error."
+  "Refer to CALLER when reporting a submit error.
+
+Also report http code of RESPONSE, which is distinct from SYMBOL-STATUS, and ERROR-THROWN.  The http code is stored in RESPONSE-STATUS."
   (gnus-message 3 "%s %s: http status %s, %s" caller symbol-status response-status
                 (error-message-string error-thrown)))
 
@@ -867,7 +872,8 @@ The two hashtables being reconciled are `nnhackernews-location-hashtb' and
     (caller posturl postdata retry &key data response &allow-other-keys)
   "If necessary, login, then \"goto\" fields take us to target.
 
-And if accused of being a bot, retry with CALLER, POSTURL, POSTDATA (and toggle RETRY)."
+And if accused of being a bot, retry with CALLER, POSTURL, POSTDATA
+\(and toggle RETRY).  Use DATA and RESPONSE to determine if we need to login again."
   (let* ((dom (nnhackernews--domify data))
          (form (car (alist-get 'form (alist-get 'body dom))))
          (url (request-response-url response))
@@ -1174,7 +1180,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
       (message "%s: %s" server (substring string (length magic))))))
 
 (cl-defun nnhackernews--request-delete-success (&key data &allow-other-keys)
-  "Delete with extreme prejudice."
+  "Delete with extreme prejudice the hidden items in DATA."
   (let* ((dom (nnhackernews--domify data))
          hidden)
     (nnhackernews--extract-hidden dom hidden)
