@@ -578,7 +578,7 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
                                                 nnhackernews-score-files))))
     (let* ((num-headers (length (nnhackernews-get-headers
                                  (gnus-group-real-name group))))
-           (marks (gnus-info-marks (nth 2 (gnus-group-entry group))))
+           (marks (gnus-info-marks (gnus-get-info group)))
            (seen (or (cdr (--max-by (> (or (cdr it) 0) (or (cdr other) 0))
                                     (alist-get 'seen marks)))
                      0)))
