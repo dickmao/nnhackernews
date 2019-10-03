@@ -1142,7 +1142,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
         (nnheader-insert-nov (nnhackernews--make-header i group)))
       'nov)))
 
-(deffoo nnhackernews-close-server (&optional server)
+(deffoo nnhackernews-close-server (&optional server _defs)
   (nnhackernews--normalize-server)
   t)
 
