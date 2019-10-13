@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/sh -ex
 
 # The following is a derivative work of
 # https://github.com/purcell/package-lint
@@ -9,25 +9,27 @@ EMACS="${EMACS:=emacs}"
 INIT_PACKAGE_EL="(progn
   (require 'package)
   (push '(\"melpa\" . \"http://melpa.org/packages/\") package-archives)
-  (package-initialize))"
+  (package-initialize)
+  (package-refresh-contents))"
 
+# rm -rf "$HOME"/.emacs.d/elpa/package-lint-*
+
+# Get mainline package-lint, then replace package-lint.el with dickmao's.
+# quelpa doesn't get data/stdlib-changes.gz for whatever reason.
+( cd /tmp ; curl -OskL https://raw.githubusercontent.com/dickmao/package-lint/datetime/package-lint.el )
 "$EMACS" -Q -batch \
          --eval "$INIT_PACKAGE_EL" \
-         --eval "(unless (package-installed-p (quote quelpa)) (package-refresh-contents) (package-install (quote quelpa)))" \
-         --eval "(unless (package-installed-p (quote package-lint)) (quelpa (quote (package-lint :fetcher github :repo \"dickmao/package-lint\" :branch \"datetime\"))))"
+         --eval "(package-install (quote package-lint))" \
+         --eval "(let ((dir (file-name-directory (locate-library \"package-lint\")))) \
+                     (ignore-errors (delete-file (expand-file-name \"package-lint.elc\" dir))) \
+                     (copy-file (expand-file-name \"package-lint.el\" \
+                         \"/tmp\") (expand-file-name \"package-lint.el\" dir) t))"
 
-# Byte compile, failing on byte compiler errors, or on warnings unless ignored
-if [ -n "${EMACS_LINT_IGNORE+x}" ]; then
-    ERROR_ON_WARN=nil
-else
-    ERROR_ON_WARN=t
-fi
-
-BASENAME=$(basename $1)
+BASENAME=$(basename "$1")
 "$EMACS" -Q -batch \
          --eval "$INIT_PACKAGE_EL" \
          -l package-lint.el \
-         --visit $1 \
+         --visit "$1" \
          --eval "(checkdoc-eval-current-buffer)" \
          --eval "(princ (with-current-buffer checkdoc-diagnostic-buffer (buffer-string)))" \
          2>&1 | egrep -a "^$BASENAME:" | egrep -v "Messages should start" && [ -n "${EMACS_LINT_IGNORE+x}" ]
@@ -42,4 +44,4 @@ BASENAME=$(basename $1)
          --eval "$INIT_PACKAGE_EL" \
          -l package-lint.el \
          -f package-lint-batch-and-exit \
-         $1 || [ -n "${EMACS_LINT_IGNORE+x}" ]
+         "$1" || [ -n "${EMACS_LINT_IGNORE+x}" ]
