@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/sh -ex
 
 # The following is a derivative work of
 # https://github.com/purcell/package-lint
@@ -21,7 +21,7 @@ INIT_PACKAGE_EL="(progn
          --eval "$INIT_PACKAGE_EL" \
          --eval "(package-install (quote package-lint))" \
          --eval "(let ((dir (file-name-directory (locate-library \"package-lint\")))) \
-                     (delete-file (expand-file-name \"package-lint.elc\" dir)) \
+                     (ignore-errors (delete-file (expand-file-name \"package-lint.elc\" dir))) \
                      (copy-file (expand-file-name \"package-lint.el\" \
                          \"/tmp\") (expand-file-name \"package-lint.el\" dir) t))"
 
