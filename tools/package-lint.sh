@@ -16,14 +16,14 @@ INIT_PACKAGE_EL="(progn
 
 # Get mainline package-lint, then replace package-lint.el with dickmao's.
 # quelpa doesn't get data/stdlib-changes.gz for whatever reason.
-curl -OskL https://raw.githubusercontent.com/dickmao/package-lint/datetime/package-lint.el
+( cd /tmp ; curl -OskL https://raw.githubusercontent.com/dickmao/package-lint/datetime/package-lint.el )
 "$EMACS" -Q -batch \
          --eval "$INIT_PACKAGE_EL" \
          --eval "(package-install (quote package-lint))" \
          --eval "(let ((dir (file-name-directory (locate-library \"package-lint\")))) \
                      (delete-file (expand-file-name \"package-lint.elc\" dir)) \
                      (copy-file (expand-file-name \"package-lint.el\" \
-                         default-directory) (expand-file-name \"package-lint.el\" dir) t))"
+                         \"/tmp\") (expand-file-name \"package-lint.el\" dir) t))"
 
 BASENAME=$(basename "$1")
 "$EMACS" -Q -batch \
