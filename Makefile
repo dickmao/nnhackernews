@@ -2,8 +2,8 @@ EMACS ?= $(shell which emacs)
 SRC=$(shell cask files)
 PKBUILD=2.3
 ELCFILES = $(SRC:.el=.elc)
-ifeq ($(TRAVIS_REPO_SLUG),)
-TRAVIS_REPO_SLUG := $(shell git config --global user.name)/$(shell basename `git rev-parse --show-toplevel`)
+ifeq ($(TRAVIS_PULL_REQUEST_SLUG),)
+TRAVIS_PULL_REQUEST_SLUG := $(shell git config --global user.name)/$(shell basename `git rev-parse --show-toplevel`)
 endif
 ifeq ($(TRAVIS_PULL_REQUEST_BRANCH),)
 TRAVIS_PULL_REQUEST_BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
@@ -58,7 +58,7 @@ test-install:
 	--eval "(setq rcp (package-recipe-lookup \"nnhackernews\"))" \
 	--eval "(unless (file-exists-p package-build-archive-dir) \
 	           (make-directory package-build-archive-dir))" \
-	--eval "(let* ((my-repo \"$(TRAVIS_REPO_SLUG)\") \
+	--eval "(let* ((my-repo \"$(TRAVIS_PULL_REQUEST_SLUG)\") \
 	               (my-branch \"$(TRAVIS_PULL_REQUEST_BRANCH)\") \
 	               (my-commit \"$(TRAVIS_PULL_REQUEST_SHA)\")) \
 	           (oset rcp :repo my-repo) \
