@@ -1565,16 +1565,12 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
    (cond ((nnhackernews--gate)
           (let* ((dont-ask (lambda (prompt)
                              (when (cl-search "mpty article" prompt) t)))
-                 (link-p (not (null (message-fetch-field "Link"))))
+                 (link-p (message-fetch-field "Link"))
                  (message-shoot-gnksa-feet (if link-p t message-shoot-gnksa-feet)))
-            (condition-case err
-                (progn
-                  (when link-p
-                    (add-function :before-until (symbol-function 'y-or-n-p) dont-ask))
-                  (prog1 (apply f args)
-                    (remove-function (symbol-function 'y-or-n-p) dont-ask)))
-              (error (remove-function (symbol-function 'y-or-n-p) dont-ask)
-                     (error (error-message-string err))))))
+            (when link-p
+              (add-function :before-until (symbol-function 'y-or-n-p) dont-ask))
+            (unwind-protect (apply f args)
+              (remove-function (symbol-function 'y-or-n-p) dont-ask))))
          (t (apply f args)))))
 
 (add-function
