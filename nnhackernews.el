@@ -549,7 +549,7 @@ Originally written by Paul Issartel."
   "Call `gnus-summary-exit' without the hackery."
   (remove-function (symbol-function 'gnus-summary-exit)
                    (symbol-function 'nnhackernews--score-pending))
-  (gnus-summary-exit)
+  (gnus-summary-exit nil t)
   (add-function :after (symbol-function 'gnus-summary-exit)
                 (symbol-function 'nnhackernews--score-pending)))
 
@@ -563,7 +563,7 @@ Originally written by Paul Issartel."
         (error nil))
     t))
 
-(defsubst nnhackernews--rescore (group &optional force)
+(defun nnhackernews--rescore (group &optional force)
   "Can't figure out GROUP hook that can remove itself (quine conundrum).
 
 FORCE is generally t unless coming from `nnhackernews--score-pending'."
@@ -584,7 +584,7 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
                      0)))
       (unless (zerop seen)
         (when (or force (> num-headers seen))
-          (save-excursion
+          (save-window-excursion
             (let ((gnus-auto-select-subject nil)
                   (gnus-summary-next-group-on-exit nil))
               (gnus-summary-read-group group nil t)
@@ -1492,29 +1492,30 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
   (when (nnhackernews--gate)
     (nnhackernews-summary-mode)))
 
-;; I believe I did try buffer-localizing hooks, and it wasn't sufficient
-(add-hook 'gnus-article-mode-hook #'nnhackernews-article-mode-activate)
-(add-hook 'gnus-summary-mode-hook #'nnhackernews-summary-mode-activate)
+(when (or (gnus-native-method-p '(nnhackernews ""))
+          (gnus-secondary-method-p '(nnhackernews "")))
+  ;; I believe I did try buffer-localizing hooks, and it wasn't sufficient
+  (add-hook 'gnus-article-mode-hook #'nnhackernews-article-mode-activate)
+  (add-hook 'gnus-summary-mode-hook #'nnhackernews-summary-mode-activate)
 
-;; Avoid having to select the GROUP to make the unread number go down.
-(mapc (lambda (hook)
-        (add-hook hook
-                  (lambda () (mapc (lambda (group)
-                                     (nnhackernews--score-unread group))
-                                   `(,nnhackernews--group-ask
-                                     ,nnhackernews--group-show
-                                     ,nnhackernews--group-job
-                                     ,nnhackernews--group-stories)))))
-      '(gnus-started-hook gnus-after-getting-new-news-hook))
-
-(add-hook 'gnus-started-hook
-          (lambda () (mapc (lambda (group)
-                             (nnhackernews--mark-scored-as-read group))
-                           `(,nnhackernews--group-ask
-                             ,nnhackernews--group-show
-                             ,nnhackernews--group-job
-                             ,nnhackernews--group-stories)))
-          t)
+  ;; Avoid having to select the GROUP to make the unread number go down.
+  (mapc (lambda (hook)
+          (add-hook hook
+                    (lambda () (mapc (lambda (group)
+                                       (nnhackernews--score-unread group))
+                                     `(,nnhackernews--group-ask
+                                       ,nnhackernews--group-show
+                                       ,nnhackernews--group-job
+                                       ,nnhackernews--group-stories)))))
+        '(gnus-started-hook gnus-after-getting-new-news-hook))
+  (add-hook 'gnus-started-hook
+            (lambda () (mapc (lambda (group)
+                               (nnhackernews--mark-scored-as-read group))
+                             `(,nnhackernews--group-ask
+                               ,nnhackernews--group-show
+                               ,nnhackernews--group-job
+                               ,nnhackernews--group-stories)))
+            t))
 
 ;; "Can't figure out hook that can remove itself (quine conundrum)"
 (add-function :around (symbol-function 'gnus-summary-exit)
