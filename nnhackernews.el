@@ -599,7 +599,6 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
             (let ((gnus-auto-select-subject nil)
                   (gnus-summary-next-group-on-exit nil))
               (nnhackernews--with-mutex nnhackernews--mutex-display-article
-                (nnhackernews--with-mutex nnhackernews--mutex-request-group
                 (let ((gnus-newsgroup-display 0))
                   (gnus-summary-read-group group nil t)
                   (nnhackernews--summary-exit))))))))))
