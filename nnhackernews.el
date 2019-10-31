@@ -693,7 +693,6 @@ The two hashtables being reconciled are `nnhackernews-location-hashtb' and
 ;;             nnhackernews-request-group
 (deffoo nnhackernews-request-group (group &optional server _fast info)
   (nnhackernews--normalize-server)
-  (nnhackernews--with-mutex nnhackernews--mutex-request-group
     (nnhackernews--with-group group
       (let* ((info (or info (gnus-get-info gnus-newsgroup-name)))
              (headers (nnhackernews-get-headers group))
@@ -713,7 +712,7 @@ The two hashtables being reconciled are `nnhackernews-location-hashtb' and
            t)
           (gnus-info-set-method info (gnus-group-method gnus-newsgroup-name) t)
           (gnus-set-info gnus-newsgroup-name info)))
-      t)))
+      t))
 
 (defsubst nnhackernews--json-read ()
   "Copied from ein:json-read() by tkf."
