@@ -83,6 +83,14 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
 
 (defvoo nnhackernews-status-string "")
 
+(defvar nnhackernews--mutex-display-article (when (fboundp 'make-mutex)
+                                      (make-mutex "nnhackernews--mutex-display-article"))
+  "Scoring runs via `gnus-after-getting-new-news-hook' cause 'Selecting deleted buffer'.")
+
+(defvar nnhackernews--mutex-request-group (when (fboundp 'make-mutex)
+                                            (make-mutex "nnhackernews--mutex-request-group"))
+  "Scoring runs via `gnus-after-getting-new-news-hook' cause 'Selecting deleted buffer'.")
+
 (defvar nnhackernews--last-item nil "Keep track of where we are.")
 
 (defvar nnhackernews--debug-request-items nil "Keep track of ids to re-request for testing.")
@@ -563,6 +571,13 @@ Originally written by Paul Issartel."
         (error nil))
     t))
 
+(defmacro nnhackernews--with-mutex (mtx &rest body)
+  "If capable of threading, lock with MTX and execute BODY."
+  (declare (indent 1))
+  (if (fboundp 'with-mutex)
+      `(with-mutex ,mtx ,@body)
+    `(progn ,@body)))
+
 (defun nnhackernews--rescore (group &optional force)
   "Can't figure out GROUP hook that can remove itself (quine conundrum).
 
@@ -587,8 +602,10 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
           (save-window-excursion
             (let ((gnus-auto-select-subject nil)
                   (gnus-summary-next-group-on-exit nil))
-              (gnus-summary-read-group group nil t)
-              (nnhackernews--summary-exit))))))))
+              (nnhackernews--with-mutex nnhackernews--mutex-display-article
+                (nnhackernews--with-mutex nnhackernews--mutex-request-group
+                  (gnus-summary-read-group group nil t)
+                  (nnhackernews--summary-exit))))))))))
 
 (defalias 'nnhackernews--score-pending
   (lambda (&rest _args) (nnhackernews--rescore (gnus-group-name-at-point))))
@@ -680,26 +697,27 @@ The two hashtables being reconciled are `nnhackernews-location-hashtb' and
 ;;             nnhackernews-request-group
 (deffoo nnhackernews-request-group (group &optional server _fast info)
   (nnhackernews--normalize-server)
-  (nnhackernews--with-group group
-    (let* ((info (or info (gnus-get-info gnus-newsgroup-name)))
-           (headers (nnhackernews-get-headers group))
-           (first-header (1+ (or (-find-index #'identity headers) 0)))
-           (last-header (length headers))
-           (num-headers (if (> first-header last-header) 0
-                          (1+ (- last-header first-header))))
-           (status (format "211 %d %d %d %s"
-                           num-headers first-header last-header group)))
-      (gnus-message 7 "nnhackernews-request-group: %s" status)
-      (nnheader-insert "%s\n" status)
-      (when info
-        (gnus-info-set-marks
-         info
-         (append (assq-delete-all 'seen (gnus-info-marks info))
-                 (list `(seen (1 . ,num-headers))))
-         t)
-        (gnus-info-set-method info (gnus-group-method gnus-newsgroup-name) t)
-        (gnus-set-info gnus-newsgroup-name info)))
-    t))
+  (nnhackernews--with-mutex nnhackernews--mutex-request-group
+    (nnhackernews--with-group group
+      (let* ((info (or info (gnus-get-info gnus-newsgroup-name)))
+             (headers (nnhackernews-get-headers group))
+             (first-header (1+ (or (-find-index #'identity headers) 0)))
+             (last-header (length headers))
+             (num-headers (if (> first-header last-header) 0
+                            (1+ (- last-header first-header))))
+             (status (format "211 %d %d %d %s"
+                             num-headers first-header last-header group)))
+        (gnus-message 7 "nnhackernews-request-group: %s" status)
+        (nnheader-insert "%s\n" status)
+        (when info
+          (gnus-info-set-marks
+           info
+           (append (assq-delete-all 'seen (gnus-info-marks info))
+                   (list `(seen (1 . ,num-headers))))
+           t)
+          (gnus-info-set-method info (gnus-group-method gnus-newsgroup-name) t)
+          (gnus-set-info gnus-newsgroup-name info)))
+      t)))
 
 (defsubst nnhackernews--json-read ()
   "Copied from ein:json-read() by tkf."
@@ -1355,16 +1373,17 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
 
 (defalias 'nnhackernews--display-article
   (lambda (article &optional all-headers _header)
-    (condition-case err
-        (gnus-article-prepare article all-headers)
-      (error
-       (if nnhackernews-render-story
-           (progn
-             (gnus-message 7 "nnhackernews--display-article: '%s' (falling back...)"
-                           (error-message-string err))
-             (nnhackernews--fallback-link)
-             (gnus-article-prepare article all-headers))
-         (error (error-message-string err))))))
+    (nnhackernews--with-mutex nnhackernews--mutex-display-article
+      (condition-case err
+          (gnus-article-prepare article all-headers)
+        (error
+         (if nnhackernews-render-story
+             (progn
+               (gnus-message 7 "nnhackernews--display-article: '%s' (falling back...)"
+                             (error-message-string err))
+               (nnhackernews--fallback-link)
+               (gnus-article-prepare article all-headers))
+           (error (error-message-string err)))))))
   "In case of shr failures, dump original link.")
 
 (defsubst nnhackernews--dense-time (time)
