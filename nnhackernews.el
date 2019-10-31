@@ -87,10 +87,6 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
                                       (make-mutex "nnhackernews--mutex-display-article"))
   "Scoring runs via `gnus-after-getting-new-news-hook' cause 'Selecting deleted buffer'.")
 
-(defvar nnhackernews--mutex-request-group (when (fboundp 'make-mutex)
-                                            (make-mutex "nnhackernews--mutex-request-group"))
-  "Scoring runs via `gnus-after-getting-new-news-hook' cause 'Selecting deleted buffer'.")
-
 (defvar nnhackernews--last-item nil "Keep track of where we are.")
 
 (defvar nnhackernews--debug-request-items nil "Keep track of ids to re-request for testing.")
@@ -604,6 +600,7 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
                   (gnus-summary-next-group-on-exit nil))
               (nnhackernews--with-mutex nnhackernews--mutex-display-article
                 (nnhackernews--with-mutex nnhackernews--mutex-request-group
+                (let ((gnus-newsgroup-display 0))
                   (gnus-summary-read-group group nil t)
                   (nnhackernews--summary-exit))))))))))
 
