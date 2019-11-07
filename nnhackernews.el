@@ -599,9 +599,10 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
             (let ((gnus-auto-select-subject nil)
                   (gnus-summary-next-group-on-exit nil))
               (nnhackernews--with-mutex nnhackernews--mutex-display-article
-                (let ((gnus-newsgroup-display 0))
-                  (gnus-summary-read-group group nil t)
-                  (nnhackernews--summary-exit))))))))))
+                (cl-letf (((symbol-function 'read-string)
+                           (lambda (&rest _args) 0)))
+                  (gnus-summary-read-group group nil t))
+                (nnhackernews--summary-exit)))))))))
 
 (defalias 'nnhackernews--score-pending
   (lambda (&rest _args) (nnhackernews--rescore (gnus-group-name-at-point))))

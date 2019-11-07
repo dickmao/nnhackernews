@@ -8,9 +8,11 @@ EMACS="${EMACS:=emacs}"
 
 INIT_PACKAGE_EL="(progn
   (require 'package)
-  (push '(\"melpa\" . \"http://melpa.org/packages/\") package-archives)
   (package-initialize)
-  (package-refresh-contents))"
+  (push (quote (\"melpa\" . \"http://melpa.org/packages/\")) package-archives)
+  (package-refresh-contents)
+  (unless (package-installed-p (quote package-lint))
+    (package-install (quote package-lint))))"
 
 # rm -rf "$HOME"/.emacs.d/elpa/package-lint-*
 
@@ -19,7 +21,6 @@ INIT_PACKAGE_EL="(progn
 ( cd /tmp ; curl -OskL https://raw.githubusercontent.com/dickmao/package-lint/datetime/package-lint.el )
 "$EMACS" -Q -batch \
          --eval "$INIT_PACKAGE_EL" \
-         --eval "(package-install (quote package-lint))" \
          --eval "(let ((dir (file-name-directory (locate-library \"package-lint\")))) \
                      (ignore-errors (delete-file (expand-file-name \"package-lint.elc\" dir))) \
                      (copy-file (expand-file-name \"package-lint.el\" \
@@ -43,5 +44,16 @@ BASENAME=$(basename "$1")
 "$EMACS" -Q -batch \
          --eval "$INIT_PACKAGE_EL" \
          -l package-lint.el \
+         --eval "(defconst package-lint--sane-prefixes \
+                   (rx \
+                    string-start \
+                    (or \
+                     \"org-dblock-write:\" \
+                     \"string-trim-left\" \
+                     \"org-babel-execute:\" \
+                     \"org-babel-prep-session:\" \
+                     \"org-babel-variable-assignments:\" \
+                     \"org-babel-default-header-args:\" \
+                     \"pcomplete/\")))" \
          -f package-lint-batch-and-exit \
          "$1" || [ -n "${EMACS_LINT_IGNORE+x}" ]
