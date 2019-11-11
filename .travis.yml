@@ -38,7 +38,7 @@ matrix:
     - env: EMACS_CI=emacs-snapshot
   include:
     - os: linux
-      env: EMACS_CI=emacs-25-1 PY=python PIP="${PY} -m pip install --user"
+      env: EMACS_CI=emacs-25-2 PY=python PIP="${PY} -m pip install --user"
     - os: linux
       env: EMACS_CI=emacs-26-2 PY=python3 PIP="${PY} -m pip install --user"
     - os: osx

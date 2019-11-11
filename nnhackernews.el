@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Keywords: news
 ;; URL: https://github.com/dickmao/nnhackernews
-;; Package-Requires: ((emacs "25.1") (request "20190819") (dash "20190401") (dash-functional "20180107") (anaphora "20180618"))
+;; Package-Requires: ((emacs "25.2") (request "20190819") (dash "20190401") (dash-functional "20180107") (anaphora "20180618"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -1317,7 +1317,8 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
              (let* ((path (car (url-path-and-query (url-generic-parse-url url))))
                     (url (replace-regexp-in-string path "/comment" url))
                     (result (nnhackernews--request-reply url body hidden))
-                    (dom (nnhackernews--domify result)))
+                    dom)
+               (setq dom (nnhackernews--domify result))
                (cl-destructuring-bind (tag params &rest args) dom
                  (setq ret (and (eq tag 'html)
                                 (string= (alist-get 'op params) "item")))
