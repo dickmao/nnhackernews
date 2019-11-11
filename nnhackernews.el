@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Keywords: news
 ;; URL: https://github.com/dickmao/nnhackernews
-;; Package-Requires: ((emacs "25.1") (request "20190819") (dash "20190401") (dash-functional "20180107") (anaphora "20180618"))
+;; Package-Requires: ((emacs "25.2") (request "20190819") (dash "20190401") (dash-functional "20180107") (anaphora "20180618"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -82,6 +82,10 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
   :group 'nnhackernews)
 
 (defvoo nnhackernews-status-string "")
+
+(defvar nnhackernews--mutex-display-article (when (fboundp 'make-mutex)
+                                      (make-mutex "nnhackernews--mutex-display-article"))
+  "Scoring runs via `gnus-after-getting-new-news-hook' cause 'Selecting deleted buffer'.")
 
 (defvar nnhackernews--last-item nil "Keep track of where we are.")
 
@@ -563,6 +567,13 @@ Originally written by Paul Issartel."
         (error nil))
     t))
 
+(defmacro nnhackernews--with-mutex (mtx &rest body)
+  "If capable of threading, lock with MTX and execute BODY."
+  (declare (indent 1))
+  (if (fboundp 'with-mutex)
+      `(with-mutex ,mtx ,@body)
+    `(progn ,@body)))
+
 (defun nnhackernews--rescore (group &optional force)
   "Can't figure out GROUP hook that can remove itself (quine conundrum).
 
@@ -586,9 +597,14 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
         (when (or force (> num-headers seen))
           (save-window-excursion
             (let ((gnus-auto-select-subject nil)
-                  (gnus-summary-next-group-on-exit nil))
-              (gnus-summary-read-group group nil t)
-              (nnhackernews--summary-exit))))))))
+                  (gnus-summary-next-group-on-exit nil)
+                  (unread (length (gnus-list-of-unread-articles group))))
+              (if (zerop unread)
+                  (gnus-message 7 "nnhackernews--rescore: skipping %s no unread"
+                                group)
+                (nnhackernews--with-mutex nnhackernews--mutex-display-article
+                                          (gnus-summary-read-group group nil t)
+                                          (nnhackernews--summary-exit))))))))))
 
 (defalias 'nnhackernews--score-pending
   (lambda (&rest _args) (nnhackernews--rescore (gnus-group-name-at-point))))
@@ -680,26 +696,26 @@ The two hashtables being reconciled are `nnhackernews-location-hashtb' and
 ;;             nnhackernews-request-group
 (deffoo nnhackernews-request-group (group &optional server _fast info)
   (nnhackernews--normalize-server)
-  (nnhackernews--with-group group
-    (let* ((info (or info (gnus-get-info gnus-newsgroup-name)))
-           (headers (nnhackernews-get-headers group))
-           (first-header (1+ (or (-find-index #'identity headers) 0)))
-           (last-header (length headers))
-           (num-headers (if (> first-header last-header) 0
-                          (1+ (- last-header first-header))))
-           (status (format "211 %d %d %d %s"
-                           num-headers first-header last-header group)))
-      (gnus-message 7 "nnhackernews-request-group: %s" status)
-      (nnheader-insert "%s\n" status)
-      (when info
-        (gnus-info-set-marks
-         info
-         (append (assq-delete-all 'seen (gnus-info-marks info))
-                 (list `(seen (1 . ,num-headers))))
-         t)
-        (gnus-info-set-method info (gnus-group-method gnus-newsgroup-name) t)
-        (gnus-set-info gnus-newsgroup-name info)))
-    t))
+    (nnhackernews--with-group group
+      (let* ((info (or info (gnus-get-info gnus-newsgroup-name)))
+             (headers (nnhackernews-get-headers group))
+             (first-header (1+ (or (-find-index #'identity headers) 0)))
+             (last-header (length headers))
+             (num-headers (if (> first-header last-header) 0
+                            (1+ (- last-header first-header))))
+             (status (format "211 %d %d %d %s"
+                             num-headers first-header last-header group)))
+        (gnus-message 7 "nnhackernews-request-group: %s" status)
+        (nnheader-insert "%s\n" status)
+        (when info
+          (gnus-info-set-marks
+           info
+           (append (assq-delete-all 'seen (gnus-info-marks info))
+                   (list `(seen (1 . ,num-headers))))
+           t)
+          (gnus-info-set-method info (gnus-group-method gnus-newsgroup-name) t)
+          (gnus-set-info gnus-newsgroup-name info)))
+      t))
 
 (defsubst nnhackernews--json-read ()
   "Copied from ein:json-read() by tkf."
@@ -1009,42 +1025,45 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
             ,nnhackernews--group-show
             ,nnhackernews--group-job
             ,nnhackernews--group-stories)))
-  (when-let ((max-item (or static-max-item (nnhackernews--request-max-item))))
-    (let* ((stories (or static-newstories (nnhackernews--request-newstories)))
-           (earliest-story (nth (1- (min nnhackernews-max-items-per-scan
-                                         (length stories)))
-                                stories))
-           (start-item (if nnhackernews--last-item
-                           (1+ nnhackernews--last-item)
-                         (min earliest-story
-                              (- max-item nnhackernews-max-items-per-scan))))
-           (counts (gnus-make-hashtable))
-           (items (nnhackernews--select-items start-item max-item stories)))
-      (dolist (item items)
-        (-when-let* ((plst (nnhackernews--request-item item))
-                     (not-deleted (not (plist-get plst :deleted)))
-                     (type (plist-get plst :type)))
-          (nnhackernews-add-entry nnhackernews-refs-hashtb plst :parent)
-          (nnhackernews-add-entry nnhackernews-authors-hashtb plst :by)
-          (nnhackernews--replace-hash type (lambda (x) (1+ (or x 0))) counts)
-          (setq plst (plist-put plst :link_title
-                                (or (plist-get
-                                     (nnhackernews--retrieve-root plst)
-                                     :title) "")))
-          (cl-case (intern type)
-            (job (nnhackernews--append-header plst nnhackernews--group-job))
-            ((story comment) (nnhackernews--append-header plst))
-            (otherwise (gnus-message 5 "nnhackernews-incoming: ignoring type %s" type)))))
-      (setq nnhackernews--last-item max-item)
-      (gnus-message
-       5 (concat "nnhackernews--incoming: "
-                 (format "%d requests, " (length nnhackernews--debug-request-items))
-                 (let ((result ""))
-                   (nnhackernews--maphash
-                    (lambda (key value)
-                      (setq result (concat result (format "%s +%s " key value))))
-                    counts)
-                   result))))))
+  (let ((max-item (or static-max-item (nnhackernews--request-max-item))))
+    (if (and nnhackernews--last-item (<= max-item nnhackernews--last-item))
+        (gnus-message 7 "nnhackernews--incoming: max %s <= last %s"
+                      max-item nnhackernews--last-item)
+      (let* ((stories (or static-newstories (nnhackernews--request-newstories)))
+             (earliest-story (nth (1- (min nnhackernews-max-items-per-scan
+                                           (length stories)))
+                                  stories))
+             (start-item (if nnhackernews--last-item
+                             (1+ nnhackernews--last-item)
+                           (min earliest-story
+                                (- max-item nnhackernews-max-items-per-scan))))
+             (counts (gnus-make-hashtable))
+             (items (nnhackernews--select-items start-item max-item stories)))
+        (dolist (item items)
+          (-when-let* ((plst (nnhackernews--request-item item))
+                       (not-deleted (not (plist-get plst :deleted)))
+                       (type (plist-get plst :type)))
+            (nnhackernews-add-entry nnhackernews-refs-hashtb plst :parent)
+            (nnhackernews-add-entry nnhackernews-authors-hashtb plst :by)
+            (nnhackernews--replace-hash type (lambda (x) (1+ (or x 0))) counts)
+            (setq plst (plist-put plst :link_title
+                                  (or (plist-get
+                                       (nnhackernews--retrieve-root plst)
+                                       :title) "")))
+            (cl-case (intern type)
+              (job (nnhackernews--append-header plst nnhackernews--group-job))
+              ((story comment) (nnhackernews--append-header plst))
+              (otherwise (gnus-message 5 "nnhackernews-incoming: ignoring type %s" type)))))
+        (setq nnhackernews--last-item max-item)
+        (gnus-message
+         5 (concat "nnhackernews--incoming: "
+                   (format "%d requests, " (length nnhackernews--debug-request-items))
+                   (let ((result ""))
+                     (nnhackernews--maphash
+                      (lambda (key value)
+                        (setq result (concat result (format "%s +%s " key value))))
+                      counts)
+                     result)))))))
 
 (deffoo nnhackernews-request-scan (&optional group server)
   (nnhackernews--normalize-server)
@@ -1298,7 +1317,8 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
              (let* ((path (car (url-path-and-query (url-generic-parse-url url))))
                     (url (replace-regexp-in-string path "/comment" url))
                     (result (nnhackernews--request-reply url body hidden))
-                    (dom (nnhackernews--domify result)))
+                    dom)
+               (setq dom (nnhackernews--domify result))
                (cl-destructuring-bind (tag params &rest args) dom
                  (setq ret (and (eq tag 'html)
                                 (string= (alist-get 'op params) "item")))
@@ -1355,16 +1375,17 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
 
 (defalias 'nnhackernews--display-article
   (lambda (article &optional all-headers _header)
-    (condition-case err
-        (gnus-article-prepare article all-headers)
-      (error
-       (if nnhackernews-render-story
-           (progn
-             (gnus-message 7 "nnhackernews--display-article: '%s' (falling back...)"
-                           (error-message-string err))
-             (nnhackernews--fallback-link)
-             (gnus-article-prepare article all-headers))
-         (error (error-message-string err))))))
+    (nnhackernews--with-mutex nnhackernews--mutex-display-article
+      (condition-case err
+          (gnus-article-prepare article all-headers)
+        (error
+         (if nnhackernews-render-story
+             (progn
+               (gnus-message 7 "nnhackernews--display-article: '%s' (falling back...)"
+                             (error-message-string err))
+               (nnhackernews--fallback-link)
+               (gnus-article-prepare article all-headers))
+           (error (error-message-string err)))))))
   "In case of shr failures, dump original link.")
 
 (defsubst nnhackernews--dense-time (time)

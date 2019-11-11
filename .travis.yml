@@ -38,7 +38,7 @@ matrix:
     - env: EMACS_CI=emacs-snapshot
   include:
     - os: linux
-      env: EMACS_CI=emacs-25-1 PY=python PIP="${PY} -m pip install --user"
+      env: EMACS_CI=emacs-25-2 PY=python PIP="${PY} -m pip install --user"
     - os: linux
       env: EMACS_CI=emacs-26-2 PY=python3 PIP="${PY} -m pip install --user"
     - os: osx
@@ -50,4 +50,5 @@ before_script:
   - sh tools/install-cask.sh
 
 script:
+  - make test-install
   - make test || ( ( printf "To diagnose, travis logs -i | dos2unix | sed '/^begin 644/,/^end/!d' | uudecode\n" ) && ( zip -q - tests/log/* 2>/dev/null | uuencode log.zip ) && false)
