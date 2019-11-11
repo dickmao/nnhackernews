@@ -597,12 +597,14 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
         (when (or force (> num-headers seen))
           (save-window-excursion
             (let ((gnus-auto-select-subject nil)
-                  (gnus-summary-next-group-on-exit nil))
-              (nnhackernews--with-mutex nnhackernews--mutex-display-article
-                (cl-letf (((symbol-function 'read-string)
-                           (lambda (&rest _args) 0)))
-                  (gnus-summary-read-group group nil t))
-                (nnhackernews--summary-exit)))))))))
+                  (gnus-summary-next-group-on-exit nil)
+                  (unread (length (gnus-list-of-unread-articles group))))
+              (if (zerop unread)
+                  (gnus-message 7 "nnhackernews--rescore: skipping %s no unread"
+                                group)
+                (nnhackernews--with-mutex nnhackernews--mutex-display-article
+                                          (gnus-summary-read-group group nil t)
+                                          (nnhackernews--summary-exit))))))))))
 
 (defalias 'nnhackernews--score-pending
   (lambda (&rest _args) (nnhackernews--rescore (gnus-group-name-at-point))))
@@ -1023,42 +1025,45 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
             ,nnhackernews--group-show
             ,nnhackernews--group-job
             ,nnhackernews--group-stories)))
-  (when-let ((max-item (or static-max-item (nnhackernews--request-max-item))))
-    (let* ((stories (or static-newstories (nnhackernews--request-newstories)))
-           (earliest-story (nth (1- (min nnhackernews-max-items-per-scan
-                                         (length stories)))
-                                stories))
-           (start-item (if nnhackernews--last-item
-                           (1+ nnhackernews--last-item)
-                         (min earliest-story
-                              (- max-item nnhackernews-max-items-per-scan))))
-           (counts (gnus-make-hashtable))
-           (items (nnhackernews--select-items start-item max-item stories)))
-      (dolist (item items)
-        (-when-let* ((plst (nnhackernews--request-item item))
-                     (not-deleted (not (plist-get plst :deleted)))
-                     (type (plist-get plst :type)))
-          (nnhackernews-add-entry nnhackernews-refs-hashtb plst :parent)
-          (nnhackernews-add-entry nnhackernews-authors-hashtb plst :by)
-          (nnhackernews--replace-hash type (lambda (x) (1+ (or x 0))) counts)
-          (setq plst (plist-put plst :link_title
-                                (or (plist-get
-                                     (nnhackernews--retrieve-root plst)
-                                     :title) "")))
-          (cl-case (intern type)
-            (job (nnhackernews--append-header plst nnhackernews--group-job))
-            ((story comment) (nnhackernews--append-header plst))
-            (otherwise (gnus-message 5 "nnhackernews-incoming: ignoring type %s" type)))))
-      (setq nnhackernews--last-item max-item)
-      (gnus-message
-       5 (concat "nnhackernews--incoming: "
-                 (format "%d requests, " (length nnhackernews--debug-request-items))
-                 (let ((result ""))
-                   (nnhackernews--maphash
-                    (lambda (key value)
-                      (setq result (concat result (format "%s +%s " key value))))
-                    counts)
-                   result))))))
+  (let ((max-item (or static-max-item (nnhackernews--request-max-item))))
+    (if (and nnhackernews--last-item (<= max-item nnhackernews--last-item))
+        (gnus-message 7 "nnhackernews--incoming: max %s <= last %s"
+                      max-item nnhackernews--last-item)
+      (let* ((stories (or static-newstories (nnhackernews--request-newstories)))
+             (earliest-story (nth (1- (min nnhackernews-max-items-per-scan
+                                           (length stories)))
+                                  stories))
+             (start-item (if nnhackernews--last-item
+                             (1+ nnhackernews--last-item)
+                           (min earliest-story
+                                (- max-item nnhackernews-max-items-per-scan))))
+             (counts (gnus-make-hashtable))
+             (items (nnhackernews--select-items start-item max-item stories)))
+        (dolist (item items)
+          (-when-let* ((plst (nnhackernews--request-item item))
+                       (not-deleted (not (plist-get plst :deleted)))
+                       (type (plist-get plst :type)))
+            (nnhackernews-add-entry nnhackernews-refs-hashtb plst :parent)
+            (nnhackernews-add-entry nnhackernews-authors-hashtb plst :by)
+            (nnhackernews--replace-hash type (lambda (x) (1+ (or x 0))) counts)
+            (setq plst (plist-put plst :link_title
+                                  (or (plist-get
+                                       (nnhackernews--retrieve-root plst)
+                                       :title) "")))
+            (cl-case (intern type)
+              (job (nnhackernews--append-header plst nnhackernews--group-job))
+              ((story comment) (nnhackernews--append-header plst))
+              (otherwise (gnus-message 5 "nnhackernews-incoming: ignoring type %s" type)))))
+        (setq nnhackernews--last-item max-item)
+        (gnus-message
+         5 (concat "nnhackernews--incoming: "
+                   (format "%d requests, " (length nnhackernews--debug-request-items))
+                   (let ((result ""))
+                     (nnhackernews--maphash
+                      (lambda (key value)
+                        (setq result (concat result (format "%s +%s " key value))))
+                      counts)
+                     result)))))))
 
 (deffoo nnhackernews-request-scan (&optional group server)
   (nnhackernews--normalize-server)
