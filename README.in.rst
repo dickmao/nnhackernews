@@ -5,8 +5,8 @@
 .. COMMENTARY (see Makefile)
 
 .. |build-status|
-   image:: https://travis-ci.org/dickmao/nnhackernews.svg?branch=master
-   :target: https://travis-ci.org/dickmao/nnhackernews
+   image:: https://travis-ci.com/dickmao/nnhackernews.svg?branch=master
+   :target: https://travis-ci.com/dickmao/nnhackernews
    :alt: Build Status
 .. |melpa-dev|
    image:: https://melpa.org/packages/nnhackernews-badge.svg
