@@ -47,7 +47,7 @@ Enter the ``nnhackernews:news`` newsgroup with ``RET``.
 
 Gnus will only show followup comments for threads you read, so be selective.  If you accidentally read a thread, or decide the thread is uninteresting, you may ``C-k`` it to prevent Gnus from showing followups.  Use ``C-k`` liberally.
 
-When finished, "catch-up" via ``c`` to flush the unread threads.  Gnus will not show comments for them.
+The signal-to-noise of the hackernews firehose is such that I often "catch-up" via ``c`` to flush the unread threads.
 
 Create a post via ``a``.
 
