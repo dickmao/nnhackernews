@@ -36,12 +36,21 @@ Alternatively, copy ``nnhackernews.el`` to a directory among ``C-h v RET load-pa
 
 Usage
 =====
-In your ``.gnus`` or ``.emacs``,
+In your ``.emacs`` or ``init.el``, use ONE of the following:
 
 ::
 
-   (add-to-list 'gnus-secondary-select-methods
-                '(nnhackernews ""))
+   ;; Applies to first-time Gnus users
+   (custom-set-variables '(gnus-select-method (quote (nnhackernews ""))))
+
+or, if you're an existing Gnus user,
+
+::
+
+   ;; Applies to existing Gnus users
+   (add-to-list 'gnus-secondary-select-methods '(nnhackernews ""))
+
+Then ``M-x gnus``.
 
 Enter the ``nnhackernews:news`` newsgroup with ``RET``.
 
