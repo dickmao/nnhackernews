@@ -553,7 +553,9 @@ Originally written by Paul Issartel."
   "Call `gnus-summary-exit' without the hackery."
   (remove-function (symbol-function 'gnus-summary-exit)
                    (symbol-function 'nnhackernews--score-pending))
-  (gnus-summary-exit nil t)
+  (gnus-summary-exit t t)
+  (gnus-kill-buffer (gnus-summary-buffer-name gnus-newsgroup-name))
+  (setq gnus-summary-buffer (default-value 'gnus-summary-buffer))
   (add-function :after (symbol-function 'gnus-summary-exit)
                 (symbol-function 'nnhackernews--score-pending)))
 
@@ -598,6 +600,7 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
           (save-window-excursion
             (let ((gnus-auto-select-subject nil)
                   (gnus-summary-next-group-on-exit nil)
+                  (gnus-summary-buffer gnus-summary-buffer)
                   (unread (length (gnus-list-of-unread-articles group))))
               (if (zerop unread)
                   (gnus-message 7 "nnhackernews--rescore: skipping %s no unread"
