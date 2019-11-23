@@ -617,23 +617,27 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
     (aif (gnus-group-name-at-point)
         (nnhackernews--rescore it))))
 
+(defun nnhackernews-extant-summary-buffer (group)
+  "Return main thread's summary buffer for GROUP if extant."
+  (let* ((args (when (and (boundp 'gnus-threaded-get-unread-articles)
+                          gnus-threaded-get-unread-articles)
+                 '(t)))
+         (name (apply #'gnus-summary-buffer-name group args)))
+    (gnus-buffer-live-p name)))
+
 (defun nnhackernews--score-unread (group)
   "Filter unread messages for GROUP now.
 
 Otherwise *Group* buffer annoyingly overrepresents unread."
   (nnhackernews--with-group group
-    (unless (cl-some (lambda (b)
-                       (string= (buffer-name b)
-                                (gnus-summary-buffer-name
-                                 gnus-newsgroup-name t)))
-                     (buffer-list))
+    (unless (nnhackernews-extant-summary-buffer gnus-newsgroup-name)
       (nnhackernews--rescore gnus-newsgroup-name t))))
 
 (defun nnhackernews--mark-scored-as-read (group)
   "If a root article (story) is scored in GROUP, that means we've already read it."
   (nnhackernews--with-group group
     (let ((preface (format "nnhackernews--mark-scored-as-read: %s not rescoring " group))
-          (extant (get-buffer (gnus-summary-buffer-name gnus-newsgroup-name)))
+          (extant (nnhackernews-extant-summary-buffer gnus-newsgroup-name))
           (unread (gnus-group-unread gnus-newsgroup-name)))
       (cond ((or (not (numberp unread)) (<= unread 0))
              (gnus-message 7 (concat preface "(unread %s)") unread))
