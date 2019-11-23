@@ -91,7 +91,7 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
 
 (defvar nnhackernews--debug-request-items nil "Keep track of ids to re-request for testing.")
 
-(defvar nnhackernews--last-scan-time (truncate (float-time))
+(defvar nnhackernews--last-scan-time (- (truncate (float-time)) 100)
   "Don't scan more than once every few seconds.")
 
 (defmacro nnhackernews--callback (result &optional callback)
@@ -426,8 +426,10 @@ If GROUP classification omitted, figure it out."
 (defun nnhackernews-vote-current-article (vote)
   "VOTE is +1, -1, 0."
   (unless gnus-newsgroup-name (error "No current newgroup"))
-  (if-let ((article-number (or (cdr gnus-article-current)
-                               (gnus-summary-article-number))))
+  (if-let ((article-number (or (with-current-buffer gnus-article-buffer
+                                 (cdr gnus-article-current))
+                               (with-current-buffer gnus-summary-buffer
+                                 (gnus-summary-article-number)))))
       (let* ((header (nnhackernews--get-header article-number
                                            (gnus-group-real-name gnus-newsgroup-name)))
              (orig-score (format "%s" (plist-get header :score)))
@@ -553,10 +555,12 @@ Originally written by Paul Issartel."
   "Call `gnus-summary-exit' without the hackery."
   (remove-function (symbol-function 'gnus-summary-exit)
                    (symbol-function 'nnhackernews--score-pending))
-  (gnus-summary-exit t t)
-  (gnus-kill-buffer (gnus-summary-buffer-name gnus-newsgroup-name))
-  (add-function :after (symbol-function 'gnus-summary-exit)
-                (symbol-function 'nnhackernews--score-pending)))
+  (unwind-protect
+      (progn
+        (gnus-summary-exit t t)
+        (gnus-kill-buffer gnus-summary-buffer))
+    (add-function :after (symbol-function 'gnus-summary-exit)
+                  (symbol-function 'nnhackernews--score-pending))))
 
 (defsubst nnhackernews--ensure-score-files (group)
   "File I/O remains a perennial problem for score files for GROUP."
@@ -597,15 +601,16 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
       (unless (zerop seen)
         (when (or force (> num-headers seen))
           (save-window-excursion
-            (let ((gnus-auto-select-subject nil)
-                  (gnus-summary-next-group-on-exit nil)
+            (let (gnus-auto-select-subject
+                  gnus-summary-next-group-on-exit
                   (unread (length (gnus-list-of-unread-articles group))))
               (if (zerop unread)
                   (gnus-message 7 "nnhackernews--rescore: skipping %s no unread"
                                 group)
                 (nnhackernews--with-mutex nnhackernews--mutex-display-article
-                                          (gnus-summary-read-group group nil t)
-                                          (nnhackernews--summary-exit))))))))))
+                  (gnus-summary-read-group group nil t)
+                  (with-current-buffer (gnus-summary-buffer-name group)
+                    (nnhackernews--summary-exit)))))))))))
 
 (defalias 'nnhackernews--score-pending
   (lambda (&rest _args)
@@ -634,17 +639,18 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
              (gnus-message 7 (concat preface "(extant %s)") (buffer-name extant)))
             (t
              (save-excursion
-               (let ((gnus-auto-select-subject nil))
+               (let (gnus-auto-select-subject)
                  (gnus-summary-read-group gnus-newsgroup-name nil t)
-                 (dolist (datum gnus-newsgroup-data)
-                   (-when-let* ((article (gnus-data-number datum))
-                                (plst (nnhackernews--get-header article))
-                                (scored-story-p (and (plist-get plst :title)
-                                                     (> (gnus-summary-article-score article) 0))))
-                     (gnus-message 7 "nnhackernews--mark-scored-as-read: %s (%s %s)"
-                                   (plist-get plst :title) group article)
-                     (gnus-summary-mark-as-read article)))
-                 (nnhackernews--summary-exit))))))))
+                 (with-current-buffer (gnus-summary-buffer-name gnus-newsgroup-name)
+                   (dolist (datum gnus-newsgroup-data)
+                     (-when-let* ((article (gnus-data-number datum))
+                                  (plst (nnhackernews--get-header article))
+                                  (scored-story-p (and (plist-get plst :title)
+                                                       (> (gnus-summary-article-score article) 0))))
+                       (gnus-message 7 "nnhackernews--mark-scored-as-read: %s (%s %s)"
+                                     (plist-get plst :title) group article)
+                       (gnus-summary-mark-as-read article)))
+                   (nnhackernews--summary-exit)))))))))
 
 (deffoo nnhackernews-request-group-scan (group &optional server info)
   "M-g from *Group* calls this."
@@ -1548,6 +1554,7 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                        (if (nnhackernews--gate) nil
                          gnus-summary-next-group-on-exit)))
                   (apply f args))))
+
 (add-function :after (symbol-function 'gnus-summary-exit)
               (symbol-function 'nnhackernews--score-pending))
 
