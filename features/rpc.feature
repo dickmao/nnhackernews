@@ -17,12 +17,12 @@ Scenario: gnus-demon-scan-news while summary buffer open, then auto-rescore upon
   And prospective unreads for "nnhackernews:news" is 93
   And I press "q"
   Then I should be in buffer "*Group*"
-  And I dump buffer
   Then of-record unreads for "nnhackernews:news" is 186
   And I scan news
   Then of-record unreads for "nnhackernews:news" is 280
   When I go to word "nnhackernews:news"
   And I press "RET"
+  Then I should be in buffer "*Summary nnhackernews:news*"
   And I go to word "DoreenMich"
   And I press "C-k"
   And prospective unreads for "nnhackernews:news" is 273
@@ -52,7 +52,6 @@ Scenario: delete
   When I switch to buffer "*Summary nnhackernews:news*"
   And I press "c y"
   Then I should be in buffer "*Group*"
-  And I dump buffer
   And I scan news
   When I go to word "nnhackernews:news"
   And I press "RET"
@@ -87,7 +86,6 @@ Scenario: submit a text which must be titled
   And I type "test baby test baby 123"
   And I press "M->"
   And I type "this is a test"
-  And I dump buffer
   And I press "C-c C-c"
   When I switch to buffer "*Messages*"
   Then I should not see "Couldn't send message via news"
