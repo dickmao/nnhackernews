@@ -622,9 +622,12 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
 
 Otherwise *Group* buffer annoyingly overrepresents unread."
   (nnhackernews--with-group group
-    (let ((extant (get-buffer (gnus-summary-buffer-name gnus-newsgroup-name))))
-      (unless extant
-        (nnhackernews--rescore gnus-newsgroup-name t)))))
+    (unless (cl-some (lambda (b)
+                       (string= (buffer-name b)
+                                (gnus-summary-buffer-name
+                                 gnus-newsgroup-name t)))
+                     (buffer-list))
+      (nnhackernews--rescore gnus-newsgroup-name t))))
 
 (defun nnhackernews--mark-scored-as-read (group)
   "If a root article (story) is scored in GROUP, that means we've already read it."
