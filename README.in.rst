@@ -17,7 +17,7 @@
    :target: http://melpa-stable.milkbox.net/#/ein
    :alt: MELPA stable version
 
-.. image:: screenshot.gif
+.. image:: screencast.gif
 
 Install
 =======
