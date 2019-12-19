@@ -17,7 +17,7 @@ A Gnus backend for Hacker News.
    :target: http://melpa-stable.milkbox.net/#/ein
    :alt: MELPA stable version
 
-.. image:: screenshot.png
+.. image:: screenshot.gif
 
 Install
 =======
@@ -71,5 +71,10 @@ From the summary buffer, ``/o`` redisplays articles already read.  ``x`` undispl
 ``S c`` cancels articles.
 
 Gnus beginners may find the interface bewildering.  In particular, groups with no unread articles do not display.  Use ``L`` to bring them out of hiding.
+
+Gnus For a New Generation
+=========================
+The Gnus software that the author himself uses is at https://github.com/dickmao/gnus.
+His changes include non-blocking fetch, and fixing threads sorting.
 
 .. _Getting started: http://melpa.org/#/getting-started
