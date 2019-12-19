@@ -617,20 +617,27 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
     (aif (gnus-group-name-at-point)
         (nnhackernews--rescore it))))
 
+(defun nnhackernews-extant-summary-buffer (group)
+  "Return main thread's summary buffer for GROUP if extant."
+  (let* ((args (when (and (boundp 'gnus-threaded-get-unread-articles)
+                          gnus-threaded-get-unread-articles)
+                 '(t)))
+         (name (apply #'gnus-summary-buffer-name group args)))
+    (gnus-buffer-live-p name)))
+
 (defun nnhackernews--score-unread (group)
   "Filter unread messages for GROUP now.
 
 Otherwise *Group* buffer annoyingly overrepresents unread."
   (nnhackernews--with-group group
-    (let ((extant (get-buffer (gnus-summary-buffer-name gnus-newsgroup-name))))
-      (unless extant
-        (nnhackernews--rescore gnus-newsgroup-name t)))))
+    (unless (nnhackernews-extant-summary-buffer gnus-newsgroup-name)
+      (nnhackernews--rescore gnus-newsgroup-name t))))
 
 (defun nnhackernews--mark-scored-as-read (group)
   "If a root article (story) is scored in GROUP, that means we've already read it."
   (nnhackernews--with-group group
     (let ((preface (format "nnhackernews--mark-scored-as-read: %s not rescoring " group))
-          (extant (get-buffer (gnus-summary-buffer-name gnus-newsgroup-name)))
+          (extant (nnhackernews-extant-summary-buffer gnus-newsgroup-name))
           (unread (gnus-group-unread gnus-newsgroup-name)))
       (cond ((or (not (numberp unread)) (<= unread 0))
              (gnus-message 7 (concat preface "(unread %s)") unread))
@@ -1460,6 +1467,10 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
 (fset 'gnus-user-format-function-S
       (symbol-function 'nnhackernews--format-time-elapsed))
 
+(defun nnhackernews-sort-by-number-of-articles-in-thread (t1 t2)
+  "Whichever of the T1 or T2 has the most articles."
+  (> (gnus-summary-number-of-articles-in-thread t1)
+     (gnus-summary-number-of-articles-in-thread t2)))
 
 (let ((custom-defaults
        ;; For now, revert any user overrides that I can't predict.
@@ -1491,6 +1502,10 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                                   (gnus-summary-line-format "%3t%U%R%uS %I%(%*%-10,10f  %s%)\n")
                                   (gnus-auto-extend-newsgroup nil)
                                   (gnus-add-timestamp-to-message t)
+                                  (gnus-thread-sort-functions (quote (nnhackernews-sort-by-number-of-articles-in-thread)))
+                                  (gnus-summary-thread-gathering-function
+                                   (quote gnus-gather-threads-by-references))
+                                  (gnus-subthread-sort-functions (quote (gnus-thread-sort-by-number)))
                                   (gnus-summary-display-article-function
                                    (quote ,(symbol-function 'nnhackernews--display-article)))
                                   (gnus-header-button-alist
