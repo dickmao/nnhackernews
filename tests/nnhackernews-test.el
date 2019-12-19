@@ -34,6 +34,13 @@
 (require 'ert)
 (require 'message)
 
+(mapc (lambda (key-params)
+        (when (string-match-p (car key-params) "nnhackernews")
+          (let ((params (cdr key-params)))
+            (setq params (assq-delete-all 'gnus-thread-sort-functions params))
+            (setcdr key-params params))))
+      gnus-parameters)
+
 (defun nnhackernews-test-wait-for (predicate &optional predargs ms interval continue)
   "Wait until PREDICATE function returns non-`nil'.
   PREDARGS is argument list for the PREDICATE function.

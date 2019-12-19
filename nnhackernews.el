@@ -1467,6 +1467,10 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
 (fset 'gnus-user-format-function-S
       (symbol-function 'nnhackernews--format-time-elapsed))
 
+(defun nnhackernews-sort-by-number-of-articles-in-thread (t1 t2)
+  "Whichever of the T1 or T2 has the most articles."
+  (> (gnus-summary-number-of-articles-in-thread t1)
+     (gnus-summary-number-of-articles-in-thread t2)))
 
 (let ((custom-defaults
        ;; For now, revert any user overrides that I can't predict.
@@ -1498,6 +1502,10 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                                   (gnus-summary-line-format "%3t%U%R%uS %I%(%*%-10,10f  %s%)\n")
                                   (gnus-auto-extend-newsgroup nil)
                                   (gnus-add-timestamp-to-message t)
+                                  (gnus-thread-sort-functions (quote (nnhackernews-sort-by-number-of-articles-in-thread)))
+                                  (gnus-summary-thread-gathering-function
+                                   (quote gnus-gather-threads-by-references))
+                                  (gnus-subthread-sort-functions (quote (gnus-thread-sort-by-number)))
                                   (gnus-summary-display-article-function
                                    (quote ,(symbol-function 'nnhackernews--display-article)))
                                   (gnus-header-button-alist
