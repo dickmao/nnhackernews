@@ -1035,7 +1035,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
     (mapc (lambda (group)
             (-when-let* ((full-name (gnus-group-full-name group "nnhackernews:"))
                          (info (gnus-get-info full-name)))
-              (gnus-info-set-read info nil)
+              (setf (gnus-info-read info) nil)
               (gnus-set-info full-name info)))
           `(,nnhackernews--group-ask
             ,nnhackernews--group-show
