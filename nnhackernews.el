@@ -1035,7 +1035,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
     (mapc (lambda (group)
             (-when-let* ((full-name (gnus-group-full-name group "nnhackernews:"))
                          (info (gnus-get-info full-name)))
-              (gnus-info-set-read info nil)
+              (setf (gnus-info-read info) nil)
               (gnus-set-info full-name info)))
           `(,nnhackernews--group-ask
             ,nnhackernews--group-show
@@ -1552,15 +1552,16 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                                        ,nnhackernews--group-show
                                        ,nnhackernews--group-job
                                        ,nnhackernews--group-stories)))))
-        '(gnus-started-hook gnus-after-getting-new-news-hook))
-  (add-hook 'gnus-started-hook
-            (lambda () (mapc (lambda (group)
-                               (nnhackernews--mark-scored-as-read group))
-                             `(,nnhackernews--group-ask
-                               ,nnhackernews--group-show
-                               ,nnhackernews--group-job
-                               ,nnhackernews--group-stories)))
-            t))
+        '(gnus-after-getting-new-news-hook))
+  ;; (add-hook 'gnus-started-hook
+  ;;           (lambda () (mapc (lambda (group)
+  ;;                              (nnhackernews--mark-scored-as-read group))
+  ;;                            `(,nnhackernews--group-ask
+  ;;                              ,nnhackernews--group-show
+  ;;                              ,nnhackernews--group-job
+  ;;                              ,nnhackernews--group-stories)))
+  ;;           t)
+  )
 
 ;; "Can't figure out hook that can remove itself (quine conundrum)"
 (add-function :around (symbol-function 'gnus-summary-exit)
