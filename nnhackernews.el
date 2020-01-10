@@ -551,14 +551,17 @@ Originally written by Paul Issartel."
   "Add to HASHTB the pair consisting of entry E's name to its FIELD."
   (nnhackernews--sethash (plist-get e :id) (plist-get e field) hashtb))
 
-(defsubst nnhackernews--summary-exit ()
-  "Call `gnus-summary-exit' without the hackery."
+(defun nnhackernews--summary-exit (group)
+  "Call `gnus-summary-exit' for GROUP without the hackery."
   (remove-function (symbol-function 'gnus-summary-exit)
                    (symbol-function 'nnhackernews--score-pending))
   (unwind-protect
-      (progn
-        (gnus-summary-exit t t)
-        (gnus-kill-buffer gnus-summary-buffer))
+      (let ((summary-buffer-name (gnus-summary-buffer-name group)))
+        (with-current-buffer summary-buffer-name
+          (gnus-summary-exit t t)
+          (gnus-kill-buffer gnus-article-buffer)
+          (gnus-kill-buffer gnus-original-article-buffer))
+        (gnus-kill-buffer (get-buffer summary-buffer-name)))
     (add-function :after (symbol-function 'gnus-summary-exit)
                   (symbol-function 'nnhackernews--score-pending))))
 
@@ -609,8 +612,7 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
                                 group)
                 (nnhackernews--with-mutex nnhackernews--mutex-display-article
                   (gnus-summary-read-group group nil t)
-                  (with-current-buffer (gnus-summary-buffer-name group)
-                    (nnhackernews--summary-exit)))))))))))
+                  (nnhackernews--summary-exit group))))))))))
 
 (defalias 'nnhackernews--score-pending
   (lambda (&rest _args)
@@ -656,8 +658,8 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
                                                        (> (gnus-summary-article-score article) 0))))
                        (gnus-message 7 "nnhackernews--mark-scored-as-read: %s (%s %s)"
                                      (plist-get plst :title) group article)
-                       (gnus-summary-mark-as-read article)))
-                   (nnhackernews--summary-exit)))))))))
+                       (gnus-summary-mark-as-read article))))
+                 (nnhackernews--summary-exit gnus-newsgroup-name))))))))
 
 (deffoo nnhackernews-request-group-scan (group &optional server info)
   "M-g from *Group* calls this."
