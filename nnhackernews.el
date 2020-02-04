@@ -1539,204 +1539,202 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
   (when (nnhackernews--gate)
     (nnhackernews-summary-mode)))
 
-(when (or (gnus-native-method-p '(nnhackernews ""))
-          (gnus-secondary-method-p '(nnhackernews "")))
-  ;; I believe I did try buffer-localizing hooks, and it wasn't sufficient
-  (add-hook 'gnus-article-mode-hook #'nnhackernews-article-mode-activate)
-  (add-hook 'gnus-summary-mode-hook #'nnhackernews-summary-mode-activate)
+;; I believe I did try buffer-localizing hooks, and it wasn't sufficient
+(add-hook 'gnus-article-mode-hook #'nnhackernews-article-mode-activate)
+(add-hook 'gnus-summary-mode-hook #'nnhackernews-summary-mode-activate)
 
-  ;; Avoid having to select the GROUP to make the unread number go down.
-  (mapc (lambda (hook)
-          (add-hook hook
-                    (lambda () (mapc (lambda (group)
-                                       (nnhackernews--score-unread group))
-                                     `(,nnhackernews--group-ask
-                                       ,nnhackernews--group-show
-                                       ,nnhackernews--group-job
-                                       ,nnhackernews--group-stories)))))
-        '(gnus-after-getting-new-news-hook))
-  ;; (add-hook 'gnus-started-hook
-  ;;           (lambda () (mapc (lambda (group)
-  ;;                              (nnhackernews--mark-scored-as-read group))
-  ;;                            `(,nnhackernews--group-ask
-  ;;                              ,nnhackernews--group-show
-  ;;                              ,nnhackernews--group-job
-  ;;                              ,nnhackernews--group-stories)))
-  ;;           t)
+;; Avoid having to select the GROUP to make the unread number go down.
+(mapc (lambda (hook)
+        (add-hook hook
+                  (lambda () (mapc (lambda (group)
+                                     (nnhackernews--score-unread group))
+                                   `(,nnhackernews--group-ask
+                                     ,nnhackernews--group-show
+                                     ,nnhackernews--group-job
+                                     ,nnhackernews--group-stories)))))
+      '(gnus-after-getting-new-news-hook))
+;; (add-hook 'gnus-started-hook
+;;           (lambda () (mapc (lambda (group)
+;;                              (nnhackernews--mark-scored-as-read group))
+;;                            `(,nnhackernews--group-ask
+;;                              ,nnhackernews--group-show
+;;                              ,nnhackernews--group-job
+;;                              ,nnhackernews--group-stories)))
+;;           t)
 
 
-  ;; "Can't figure out hook that can remove itself (quine conundrum)"
-  (add-function :around (symbol-function 'gnus-summary-exit)
-                (lambda (f &rest args)
-                  (let ((gnus-summary-next-group-on-exit
-                         (if (nnhackernews--gate) nil
-                           gnus-summary-next-group-on-exit)))
-                    (apply f args))))
+;; "Can't figure out hook that can remove itself (quine conundrum)"
+(add-function :around (symbol-function 'gnus-summary-exit)
+              (lambda (f &rest args)
+                (let ((gnus-summary-next-group-on-exit
+                       (if (nnhackernews--gate) nil
+                         gnus-summary-next-group-on-exit)))
+                  (apply f args))))
 
-  (add-function :after (symbol-function 'gnus-summary-exit)
-                (symbol-function 'nnhackernews--score-pending))
+(add-function :after (symbol-function 'gnus-summary-exit)
+              (symbol-function 'nnhackernews--score-pending))
 
-  (add-function :before (symbol-function 'gnus-score-save)
-                (lambda (&rest _)
-                  (when (nnhackernews--gate)
-                    (setq nnhackernews-score-files
-                          (assq-delete-all (intern gnus-newsgroup-name)
-                                           nnhackernews-score-files)))))
+(add-function :before (symbol-function 'gnus-score-save)
+              (lambda (&rest _)
+                (when (nnhackernews--gate)
+                  (setq nnhackernews-score-files
+                        (assq-delete-all (intern gnus-newsgroup-name)
+                                         nnhackernews-score-files)))))
 
-  ;; `gnus-newsgroup-p' requires valid method post-mail to return t
-  (add-to-list 'gnus-valid-select-methods '("nnhackernews" post-mail) t)
+;; `gnus-newsgroup-p' requires valid method post-mail to return t
+(add-to-list 'gnus-valid-select-methods '("nnhackernews" post-mail) t)
 
-  (add-function
-   :around (symbol-function 'message-supersede)
-   (lambda (f &rest args)
-     (cond ((nnhackernews--gate)
-            (add-function :override
-                          (symbol-function 'mml-insert-mml-markup)
-                          'ignore)
+(add-function
+ :around (symbol-function 'message-supersede)
+ (lambda (f &rest args)
+   (cond ((nnhackernews--gate)
+          (add-function :override
+                        (symbol-function 'mml-insert-mml-markup)
+                        'ignore)
+          (condition-case err
+              (prog1 (apply f args)
+                (remove-function (symbol-function 'mml-insert-mml-markup) 'ignore)
+                (save-excursion
+                  (save-restriction
+                    (message-replace-header "From" (message-make-from))
+                    (message-goto-body)
+                    (narrow-to-region (point) (point-max))
+                    (goto-char (point-max))
+                    (mm-inline-text-html nil)
+                    (delete-region (point-min) (point)))))
+            (error (remove-function (symbol-function 'mml-insert-mml-markup) 'ignore)
+                   (error (error-message-string err)))))
+         (t (apply f args)))))
+
+(add-function
+ :around (symbol-function 'message-send-news)
+ (lambda (f &rest args)
+   (cond ((nnhackernews--gate)
+          (let* ((dont-ask (lambda (prompt)
+                             (when (cl-search "mpty article" prompt) t)))
+                 (link-p (message-fetch-field "Link"))
+                 (message-shoot-gnksa-feet (if link-p t message-shoot-gnksa-feet)))
+            (when link-p
+              (add-function :before-until (symbol-function 'y-or-n-p) dont-ask))
+            (unwind-protect (apply f args)
+              (remove-function (symbol-function 'y-or-n-p) dont-ask))))
+         (t (apply f args)))))
+
+(add-function
+ :around (symbol-function 'gnus-summary-post-news)
+ (lambda (f &rest args)
+   (cond ((nnhackernews--gate)
+          (let* ((nnhackernews-post-type (read-char-choice "[l]ink / [t]ext: " '(?l ?t)))
+                 (link-header (apply-partially #'message-add-header "Link: https://"))
+                 (add-link-header (apply-partially #'add-hook
+                                                   'message-header-setup-hook
+                                                   link-header))
+                 (remove-link-header (apply-partially #'remove-hook
+                                                      'message-header-setup-hook
+                                                      link-header)))
+            (cl-case nnhackernews-post-type
+              (?l (funcall add-link-header)))
             (condition-case err
-                (prog1 (apply f args)
-                  (remove-function (symbol-function 'mml-insert-mml-markup) 'ignore)
-                  (save-excursion
-                    (save-restriction
-                      (message-replace-header "From" (message-make-from))
-                      (message-goto-body)
-                      (narrow-to-region (point) (point-max))
-                      (goto-char (point-max))
-                      (mm-inline-text-html nil)
-                      (delete-region (point-min) (point)))))
-              (error (remove-function (symbol-function 'mml-insert-mml-markup) 'ignore)
-                     (error (error-message-string err)))))
-           (t (apply f args)))))
+                (progn
+                  (apply f args)
+                  (funcall remove-link-header))
+              (error (funcall remove-link-header)
+                     (error (error-message-string err))))))
+         (t (apply f args)))))
 
-  (add-function
-   :around (symbol-function 'message-send-news)
-   (lambda (f &rest args)
-     (cond ((nnhackernews--gate)
-            (let* ((dont-ask (lambda (prompt)
-                               (when (cl-search "mpty article" prompt) t)))
-                   (link-p (message-fetch-field "Link"))
-                   (message-shoot-gnksa-feet (if link-p t message-shoot-gnksa-feet)))
-              (when link-p
-                (add-function :before-until (symbol-function 'y-or-n-p) dont-ask))
-              (unwind-protect (apply f args)
-                (remove-function (symbol-function 'y-or-n-p) dont-ask))))
-           (t (apply f args)))))
+(add-function
+ :filter-return (symbol-function 'message-make-fqdn)
+ (lambda (val)
+   (if (and (nnhackernews--gate)
+            (cl-search "--so-tickle-me" val))
+       "ycombinator.com" val)))
 
-  (add-function
-   :around (symbol-function 'gnus-summary-post-news)
-   (lambda (f &rest args)
-     (cond ((nnhackernews--gate)
-            (let* ((nnhackernews-post-type (read-char-choice "[l]ink / [t]ext: " '(?l ?t)))
-                   (link-header (apply-partially #'message-add-header "Link: https://"))
-                   (add-link-header (apply-partially #'add-hook
-                                                     'message-header-setup-hook
-                                                     link-header))
-                   (remove-link-header (apply-partially #'remove-hook
-                                                        'message-header-setup-hook
-                                                        link-header)))
-              (cl-case nnhackernews-post-type
-                (?l (funcall add-link-header)))
-              (condition-case err
-                  (progn
-                    (apply f args)
-                    (funcall remove-link-header))
-                (error (funcall remove-link-header)
-                       (error (error-message-string err))))))
-           (t (apply f args)))))
+(add-function
+ :before-until (symbol-function 'message-make-from)
+ (lambda (&rest _args)
+   (when (nnhackernews--gate)
+     (concat (nnhackernews--who-am-i) "@ycombinator.com"))))
 
-  (add-function
-   :filter-return (symbol-function 'message-make-fqdn)
-   (lambda (val)
-     (if (and (nnhackernews--gate)
-              (cl-search "--so-tickle-me" val))
-         "ycombinator.com" val)))
-
-  (add-function
-   :before-until (symbol-function 'message-make-from)
-   (lambda (&rest _args)
+(add-function
+ :around (symbol-function 'message-is-yours-p)
+ (lambda (f &rest args)
+   (let ((concat-func (lambda (f &rest args)
+                        (let ((fetched (apply f args)))
+                          (if (string= (car args) "from")
+                              (concat fetched "@ycombinator.com")
+                            fetched)))))
      (when (nnhackernews--gate)
-       (concat (nnhackernews--who-am-i) "@ycombinator.com"))))
+       (add-function :around
+                     (symbol-function 'message-fetch-field)
+                     concat-func))
+     (condition-case err
+         (prog1 (apply f args)
+           (remove-function (symbol-function 'message-fetch-field) concat-func))
+       (error (remove-function (symbol-function 'message-fetch-field) concat-func)
+              (error (error-message-string err)))))))
 
-  (add-function
-   :around (symbol-function 'message-is-yours-p)
-   (lambda (f &rest args)
-     (let ((concat-func (lambda (f &rest args)
-                          (let ((fetched (apply f args)))
-                            (if (string= (car args) "from")
-                                (concat fetched "@ycombinator.com")
-                              fetched)))))
-       (when (nnhackernews--gate)
-         (add-function :around
-                       (symbol-function 'message-fetch-field)
-                       concat-func))
-       (condition-case err
-           (prog1 (apply f args)
-             (remove-function (symbol-function 'message-fetch-field) concat-func))
-         (error (remove-function (symbol-function 'message-fetch-field) concat-func)
-                (error (error-message-string err)))))))
+(let ((protect (lambda (caller)
+                 (add-function
+                  :around (symbol-function caller)
+                  (lambda (f &rest args)
+                    (cond ((nnhackernews--gate)
+                           (condition-case err
+                               (apply f args)
+                             (error (gnus-message 7 "%s: %s"
+                                                  caller
+                                                  (error-message-string err)))))
+                          (t (apply f args))))))))
+  (funcall protect 'url-http-generic-filter)
+  (funcall protect 'url-http-end-of-document-sentinel))
 
-  (let ((protect (lambda (caller)
-                   (add-function
-                    :around (symbol-function caller)
-                    (lambda (f &rest args)
-                      (cond ((nnhackernews--gate)
-                             (condition-case err
-                                 (apply f args)
-                               (error (gnus-message 7 "%s: %s"
-                                                    caller
-                                                    (error-message-string err)))))
-                            (t (apply f args))))))))
-    (funcall protect 'url-http-generic-filter)
-    (funcall protect 'url-http-end-of-document-sentinel))
+;; Make the scoring entries Markovian
+(add-function
+ :around (symbol-function 'gnus-summary-score-entry)
+ (lambda (f header match &rest args)
+   (cond ((nnhackernews--gate)
+          (let* ((new-touched
+                  (let ((gnus-score-alist (copy-alist '((touched nil)))))
+                    (cons (apply f header match args)
+                          (cl-some #'identity (gnus-score-get 'touched)))))
+                 (new (car new-touched))
+                 (touched (cdr new-touched)))
+            (when (and touched new)
+              (-if-let* ((old (gnus-score-get header))
+                         (elem (assoc match old))
+                         (match-type (eq (nth 3 elem) (nth 3 new)))
+                         (match-date (or (and (numberp (nth 2 elem)) (numberp (nth 2 new)))
+                                         (and (not (nth 2 elem)) (not (nth 2 new))))))
+                  (setcar (cdr elem) (nth 1 new))
+                (gnus-score-set header (cons new old) nil t))
+              (gnus-score-set 'touched '(t)))
+            new))
+         (t (apply f header match args)))))
 
-  ;; Make the scoring entries Markovian
-  (add-function
-   :around (symbol-function 'gnus-summary-score-entry)
-   (lambda (f header match &rest args)
-     (cond ((nnhackernews--gate)
-            (let* ((new-touched
-                    (let ((gnus-score-alist (copy-alist '((touched nil)))))
-                      (cons (apply f header match args)
-                            (cl-some #'identity (gnus-score-get 'touched)))))
-                   (new (car new-touched))
-                   (touched (cdr new-touched)))
-              (when (and touched new)
-                (-if-let* ((old (gnus-score-get header))
-                           (elem (assoc match old))
-                           (match-type (eq (nth 3 elem) (nth 3 new)))
-                           (match-date (or (and (numberp (nth 2 elem)) (numberp (nth 2 new)))
-                                           (and (not (nth 2 elem)) (not (nth 2 new))))))
-                    (setcar (cdr elem) (nth 1 new))
-                  (gnus-score-set header (cons new old) nil t))
-                (gnus-score-set 'touched '(t)))
-              new))
-           (t (apply f header match args)))))
+;; the let'ing to nil of `gnus-summary-display-article-function'
+;; in `gnus-summary-select-article' dates back to antiquity.
+(add-function
+ :around (symbol-function 'gnus-summary-display-article)
+ (lambda (f &rest args)
+   (cond ((nnhackernews--gate)
+          (let ((gnus-summary-display-article-function
+                 (symbol-function 'nnhackernews--display-article)))
+            (apply f args)))
+         (t (apply f args)))))
 
-  ;; the let'ing to nil of `gnus-summary-display-article-function'
-  ;; in `gnus-summary-select-article' dates back to antiquity.
-  (add-function
-   :around (symbol-function 'gnus-summary-display-article)
-   (lambda (f &rest args)
-     (cond ((nnhackernews--gate)
-            (let ((gnus-summary-display-article-function
-                   (symbol-function 'nnhackernews--display-article)))
-              (apply f args)))
-           (t (apply f args)))))
+;; disallow caching as firebase might change the article numbering?
+(setq gnus-uncacheable-groups
+      (aif gnus-uncacheable-groups
+          (format "\\(%s\\)\\|\\(^nnhackernews\\)" it)
+        "^nnhackernews"))
 
-  ;; disallow caching as firebase might change the article numbering?
-  (setq gnus-uncacheable-groups
-        (aif gnus-uncacheable-groups
-            (format "\\(%s\\)\\|\\(^nnhackernews\\)" it)
-          "^nnhackernews"))
-
-  (custom-set-variables
-   '(gnus-score-after-write-file-function
-     (lambda (file)
-       (when (nnhackernews--gate)
-         (unless (member file (alist-get (intern gnus-newsgroup-name)
-                                         nnhackernews-score-files))
-           (push file (alist-get (intern gnus-newsgroup-name)
-                                 nnhackernews-score-files))))))))
+(custom-set-variables
+ '(gnus-score-after-write-file-function
+   (lambda (file)
+     (when (nnhackernews--gate)
+       (unless (member file (alist-get (intern gnus-newsgroup-name)
+                                       nnhackernews-score-files))
+         (push file (alist-get (intern gnus-newsgroup-name)
+                               nnhackernews-score-files)))))))
 
 ;; (push '((and (eq (car gnus-current-select-method) 'nnhackernews)
 ;;              (eq mark gnus-unread-mark)
