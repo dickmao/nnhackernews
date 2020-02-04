@@ -586,7 +586,9 @@ Originally written by Paul Issartel."
   "Can't figure out GROUP hook that can remove itself (quine conundrum).
 
 FORCE is generally t unless coming from `nnhackernews--score-pending'."
-  (when (nnhackernews--gate group)
+  (when (and (or (gnus-native-method-p '(nnhackernews ""))
+                 (gnus-secondary-method-p '(nnhackernews "")))
+             (nnhackernews--gate group))
     (cl-loop repeat 5
              for ensured = (nnhackernews--ensure-score-files group)
              until ensured
