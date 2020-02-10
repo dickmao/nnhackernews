@@ -483,7 +483,7 @@ If GROUP classification omitted, figure it out."
 (defmacro nnhackernews--with-group (group &rest body)
   "Disambiguate GROUP if it's empty and execute BODY."
   (declare (debug (form &rest form))
-           (indent 1))
+           (indent defun))
   `(let* ((group (or ,group (gnus-group-real-name gnus-newsgroup-name)))
           (gnus-newsgroup-name (gnus-group-full-name group "nnhackernews:")))
      ,@body))
@@ -586,9 +586,7 @@ Originally written by Paul Issartel."
   "Can't figure out GROUP hook that can remove itself (quine conundrum).
 
 FORCE is generally t unless coming from `nnhackernews--score-pending'."
-  (when (and (or (gnus-native-method-p '(nnhackernews ""))
-                 (gnus-secondary-method-p '(nnhackernews "")))
-             (nnhackernews--gate group))
+  (when (nnhackernews--gate group)
     (cl-loop repeat 5
              for ensured = (nnhackernews--ensure-score-files group)
              until ensured
@@ -633,9 +631,11 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
   "Filter unread messages for GROUP now.
 
 Otherwise *Group* buffer annoyingly overrepresents unread."
-  (nnhackernews--with-group group
-    (unless (nnhackernews-extant-summary-buffer gnus-newsgroup-name)
-      (nnhackernews--rescore gnus-newsgroup-name t))))
+  (when (or (gnus-native-method-p '(nnhackernews ""))
+            (gnus-secondary-method-p '(nnhackernews "")))
+    (nnhackernews--with-group group
+      (unless (nnhackernews-extant-summary-buffer gnus-newsgroup-name)
+        (nnhackernews--rescore gnus-newsgroup-name t)))))
 
 (defun nnhackernews--mark-scored-as-read (group)
   "If a root article (story) is scored in GROUP, that means we've already read it."
@@ -1669,11 +1669,9 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
        (add-function :around
                      (symbol-function 'message-fetch-field)
                      concat-func))
-     (condition-case err
-         (prog1 (apply f args)
-           (remove-function (symbol-function 'message-fetch-field) concat-func))
-       (error (remove-function (symbol-function 'message-fetch-field) concat-func)
-              (error (error-message-string err)))))))
+     (unwind-protect
+         (apply f args)
+       (remove-function (symbol-function 'message-fetch-field) concat-func)))))
 
 (let ((protect (lambda (caller)
                  (add-function
