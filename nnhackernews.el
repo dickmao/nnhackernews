@@ -483,7 +483,7 @@ If GROUP classification omitted, figure it out."
 (defmacro nnhackernews--with-group (group &rest body)
   "Disambiguate GROUP if it's empty and execute BODY."
   (declare (debug (form &rest form))
-           (indent 1))
+           (indent defun))
   `(let* ((group (or ,group (gnus-group-real-name gnus-newsgroup-name)))
           (gnus-newsgroup-name (gnus-group-full-name group "nnhackernews:")))
      ,@body))
@@ -631,9 +631,11 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
   "Filter unread messages for GROUP now.
 
 Otherwise *Group* buffer annoyingly overrepresents unread."
-  (nnhackernews--with-group group
-    (unless (nnhackernews-extant-summary-buffer gnus-newsgroup-name)
-      (nnhackernews--rescore gnus-newsgroup-name t))))
+  (when (or (gnus-native-method-p '(nnhackernews ""))
+            (gnus-secondary-method-p '(nnhackernews "")))
+    (nnhackernews--with-group group
+      (unless (nnhackernews-extant-summary-buffer gnus-newsgroup-name)
+        (nnhackernews--rescore gnus-newsgroup-name t)))))
 
 (defun nnhackernews--mark-scored-as-read (group)
   "If a root article (story) is scored in GROUP, that means we've already read it."
@@ -1539,31 +1541,29 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
   (when (nnhackernews--gate)
     (nnhackernews-summary-mode)))
 
-(when (or (gnus-native-method-p '(nnhackernews ""))
-          (gnus-secondary-method-p '(nnhackernews "")))
-  ;; I believe I did try buffer-localizing hooks, and it wasn't sufficient
-  (add-hook 'gnus-article-mode-hook #'nnhackernews-article-mode-activate)
-  (add-hook 'gnus-summary-mode-hook #'nnhackernews-summary-mode-activate)
+;; I believe I did try buffer-localizing hooks, and it wasn't sufficient
+(add-hook 'gnus-article-mode-hook #'nnhackernews-article-mode-activate)
+(add-hook 'gnus-summary-mode-hook #'nnhackernews-summary-mode-activate)
 
-  ;; Avoid having to select the GROUP to make the unread number go down.
-  (mapc (lambda (hook)
-          (add-hook hook
-                    (lambda () (mapc (lambda (group)
-                                       (nnhackernews--score-unread group))
-                                     `(,nnhackernews--group-ask
-                                       ,nnhackernews--group-show
-                                       ,nnhackernews--group-job
-                                       ,nnhackernews--group-stories)))))
-        '(gnus-after-getting-new-news-hook))
-  ;; (add-hook 'gnus-started-hook
-  ;;           (lambda () (mapc (lambda (group)
-  ;;                              (nnhackernews--mark-scored-as-read group))
-  ;;                            `(,nnhackernews--group-ask
-  ;;                              ,nnhackernews--group-show
-  ;;                              ,nnhackernews--group-job
-  ;;                              ,nnhackernews--group-stories)))
-  ;;           t)
-  )
+;; Avoid having to select the GROUP to make the unread number go down.
+(mapc (lambda (hook)
+        (add-hook hook
+                  (lambda () (mapc (lambda (group)
+                                     (nnhackernews--score-unread group))
+                                   `(,nnhackernews--group-ask
+                                     ,nnhackernews--group-show
+                                     ,nnhackernews--group-job
+                                     ,nnhackernews--group-stories)))))
+      '(gnus-after-getting-new-news-hook))
+;; (add-hook 'gnus-started-hook
+;;           (lambda () (mapc (lambda (group)
+;;                              (nnhackernews--mark-scored-as-read group))
+;;                            `(,nnhackernews--group-ask
+;;                              ,nnhackernews--group-show
+;;                              ,nnhackernews--group-job
+;;                              ,nnhackernews--group-stories)))
+;;           t)
+
 
 ;; "Can't figure out hook that can remove itself (quine conundrum)"
 (add-function :around (symbol-function 'gnus-summary-exit)
@@ -1661,19 +1661,17 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
  :around (symbol-function 'message-is-yours-p)
  (lambda (f &rest args)
    (let ((concat-func (lambda (f &rest args)
-                       (let ((fetched (apply f args)))
-                         (if (string= (car args) "from")
-                             (concat fetched "@ycombinator.com")
-                           fetched)))))
+                        (let ((fetched (apply f args)))
+                          (if (string= (car args) "from")
+                              (concat fetched "@ycombinator.com")
+                            fetched)))))
      (when (nnhackernews--gate)
        (add-function :around
                      (symbol-function 'message-fetch-field)
                      concat-func))
-     (condition-case err
-         (prog1 (apply f args)
-           (remove-function (symbol-function 'message-fetch-field) concat-func))
-       (error (remove-function (symbol-function 'message-fetch-field) concat-func)
-              (error (error-message-string err)))))))
+     (unwind-protect
+         (apply f args)
+       (remove-function (symbol-function 'message-fetch-field) concat-func)))))
 
 (let ((protect (lambda (caller)
                  (add-function

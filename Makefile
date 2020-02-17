@@ -1,5 +1,10 @@
 EMACS ?= $(shell which emacs)
-SRC=$(shell cask files)
+export CASK := $(shell which cask)
+ifeq ($(CASK),)
+$(error Please install CASK at https://cask.readthedocs.io/en/latest/guide/installation.html)
+endif
+CASK_DIR := $(shell EMACS=$(EMACS) cask package-directory || exit 1)
+SRC=$(shell $(CASK) files)
 PKBUILD=2.3
 ELCFILES = $(SRC:.el=.elc)
 
@@ -31,18 +36,24 @@ README.rst: README.in.rst nnhackernews.el
 test-clean:
 	rm -rf tests/.emacs* tests/.newsrc* tests/Mail tests/News tests/request tests/request-log
 
+.PHONY: cask
+cask: $(CASK_DIR)
+
+$(CASK_DIR): Cask
+	$(CASK) install
+	touch $(CASK_DIR)
+
 .PHONY: clean
 clean: test-clean
-	cask clean-elc
+	$(CASK) clean-elc
 	rm -f tests/log/*
 	rm -rf tests/test-install
 
 .PHONY: test-compile
-test-compile:
-	cask install
+test-compile: cask
 	sh -ex tools/package-lint.sh nnhackernews.el
-	! (cask eval "(let ((byte-compile-error-on-warn t)) (cask-cli/build))" 2>&1 | egrep -a "(Warning|Error):")
-	cask clean-elc
+	! ($(CASK) eval "(let ((byte-compile-error-on-warn t)) (cask-cli/build))" 2>&1 | egrep -a "(Warning|Error):")
+	$(CASK) clean-elc
 
 .PHONY: test-install
 test-install:
@@ -74,14 +85,14 @@ test-install:
 
 .PHONY: test-unit
 test-unit:
-	cask exec ert-runner -L . -L tests tests/test*.el
+	$(CASK) exec ert-runner -L . -L tests tests/test*.el
 
 .PHONY: test
 test: test-compile test-unit test-int
 
 .PHONY: test-int
 test-int: test-clean
-	cask exec ecukes --reporter magnars --debug
+	$(CASK) exec ecukes --reporter magnars --debug
 
 .PHONY: dist-clean
 dist-clean:
@@ -89,7 +100,7 @@ dist-clean:
 
 .PHONY: dist
 dist: dist-clean
-	cask package
+	$(CASK) package
 
 .PHONY: install
 install: test-compile dist
