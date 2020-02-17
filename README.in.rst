@@ -30,6 +30,7 @@ Then
 ::
 
    M-x package-refresh-contents RET
+   M-x package-initialize RET
    M-x package-install RET nnhackernews RET
 
 Alternatively, copy ``nnhackernews.el`` to a directory among ``C-h v RET load-path`` and add ``(require 'nnhackernews)`` to ``.emacs``.
