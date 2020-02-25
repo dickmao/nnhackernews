@@ -1150,10 +1150,14 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
            "Date: " (mail-header-date mail-header) "\n"
            "Message-ID: " (mail-header-id mail-header) "\n"
            "References: " (mail-header-references mail-header) "\n"
-           "Content-Type: text/html; charset=utf-8" "\n"
            "Archived-at: " permalink "\n"
            "Score: " score "\n"
            "\n")
+          (mml-insert-multipart "alternative")
+          (mml-insert-tag 'part 'type "text/html"
+                          'disposition "inline"
+                          'charset "utf-8")
+          (save-excursion (mml-insert-tag '/part))
           (-when-let*
               ((parent (plist-get header :parent))
                (parent-author
@@ -1164,14 +1168,20 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
             (insert (nnhackernews--citation-wrap parent-author parent-body)))
           (aif (and nnhackernews-render-story (plist-get header :url))
               (condition-case err
-                  (nnhackernews--request "nnhackernews-request-article" it
-                                         :success (cl-function
-                                                   (lambda (&key data &allow-other-keys)
-                                                     (insert data))))
+                  (nnhackernews--request
+                   "nnhackernews-request-article" it
+                   :success (cl-function
+                             (lambda (&key data &allow-other-keys)
+                               (insert data))))
                 (error (gnus-message 5 "nnhackernews-request-article: %s"
                                      (error-message-string err))
                        (insert body)))
             (insert body))
+          (insert "\n")
+          (if (mml-validate)
+              (message-encode-message-body)
+            (gnus-message 2 "nnhackernews-request-article: Invalid mml:\n%s"
+                          (buffer-string)))
           (cons group article-number))))))
 
 (deffoo nnhackernews-retrieve-headers (article-numbers &optional group server _fetch-old)
