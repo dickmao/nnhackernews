@@ -81,6 +81,11 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
   :type 'integer
   :group 'nnhackernews)
 
+(defcustom nnhackernews-max-render-bytes 300e3
+  "`quoted-printable-encode-region' bogs when the javascript spyware gets out of hand."
+  :type 'integer
+  :group 'nnhackernews)
+
 (defvoo nnhackernews-status-string "")
 
 (defvar nnhackernews--mutex-display-article (when (fboundp 'make-mutex)
@@ -1172,7 +1177,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                    "nnhackernews-request-article" it
                    :success (cl-function
                              (lambda (&key data &allow-other-keys)
-                               (if (> (length data) 1e6)
+                               (if (> (length data) nnhackernews-max-render-bytes)
                                    (insert body)
                                  (insert data)))))
                 (error (gnus-message 5 "nnhackernews-request-article: %s"
