@@ -1172,13 +1172,16 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                    "nnhackernews-request-article" it
                    :success (cl-function
                              (lambda (&key data &allow-other-keys)
-                               (insert data))))
+                               (if (> (length data) 1e6)
+                                   (insert body)
+                                 (insert data)))))
                 (error (gnus-message 5 "nnhackernews-request-article: %s"
                                      (error-message-string err))
                        (insert body)))
             (insert body))
           (insert "\n")
           (if (mml-validate)
+
               (message-encode-message-body)
             (gnus-message 2 "nnhackernews-request-article: Invalid mml:\n%s"
                           (buffer-string)))
