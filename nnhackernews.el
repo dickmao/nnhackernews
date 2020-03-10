@@ -1517,14 +1517,15 @@ The built-in `gnus-gather-threads-by-references' is both."
 	  (nnhackernews--sethash id thread-special threads-by-ref)))
       (dolist (thread (seq-filter #'has-refs threads))
 	(let* ((header (cl-first thread))
-	       (refs (gnus-split-references (mail-header-references header))))
-	  (let ((ref-thread
-		 (cl-some (lambda (ref) (nnhackernews--gethash ref threads-by-ref)) refs)))
-	    (if ref-thread
-		(setcdr ref-thread (nconc (cdr ref-thread) (list thread)))
-	      (setq ref-thread (special-case thread))
-	      (push ref-thread result)
-	      (nnhackernews--sethash (car refs) ref-thread threads-by-ref)))))
+	       (refs (gnus-split-references (mail-header-references header)))
+	       (ref-thread (cl-some (lambda (ref)
+				      (nnhackernews--gethash ref threads-by-ref))
+				    refs)))
+	  (if ref-thread
+	      (setcdr ref-thread (nconc (cdr ref-thread) (list thread)))
+	    (setq ref-thread (special-case thread))
+	    (push ref-thread result)
+	    (nnhackernews--sethash (car refs) ref-thread threads-by-ref))))
       (nreverse result))))
 
 (let ((custom-defaults
