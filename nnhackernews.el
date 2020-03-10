@@ -1497,25 +1497,26 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
 (defun nnhackernews-gather-threads-by-references (threads)
   "Gather THREADS by root reference, and don't be incomprehensible or buggy.
 The built-in `gnus-gather-threads-by-references' is both."
-  (let ((threads-by-ref (gnus-make-hashtable))
-	result)
-    (cl-flet ((special-case
-	       (thread)
-	       (let ((header (cl-first thread)))
-		 (if (stringp header)
-		     thread
-		   (list (mail-header-subject header) thread))))
-	      (has-refs
-	       (thread)
-	       (let ((header (cl-first thread)))
-		 (gnus-split-references (mail-header-references header)))))
-      (dolist (thread (seq-filter (lambda (thread) (not (has-refs thread))) threads))
+  (cl-flet ((special-case
+	     (thread)
+	     (let ((header (cl-first thread)))
+	       (if (stringp header)
+		   thread
+		 (list (mail-header-subject header) thread))))
+	    (has-refs
+	     (thread)
+	     (let ((header (cl-first thread)))
+	       (gnus-split-references (mail-header-references header)))))
+    (let ((threads-by-ref (gnus-make-hashtable))
+	  (separated (-separate #'has-refs threads))
+	  result)
+      (dolist (thread (cl-second separated))
 	(let* ((header (cl-first thread))
 	       (id (mail-header-id header))
 	       (thread-special (special-case thread)))
 	  (push thread-special result)
 	  (nnhackernews--sethash id thread-special threads-by-ref)))
-      (dolist (thread (seq-filter #'has-refs threads))
+      (dolist (thread (cl-first separated))
 	(let* ((header (cl-first thread))
 	       (refs (gnus-split-references (mail-header-references header)))
 	       (ref-thread (cl-some (lambda (ref)
