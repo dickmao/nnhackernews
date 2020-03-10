@@ -1494,6 +1494,39 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
   (> (gnus-summary-number-of-articles-in-thread t1)
      (gnus-summary-number-of-articles-in-thread t2)))
 
+(defun nnhackernews-gather-threads-by-references (threads)
+  "Gather THREADS by root reference, and don't be incomprehensible or buggy.
+The built-in `gnus-gather-threads-by-references' is both."
+  (let ((threads-by-ref (gnus-make-hashtable))
+	result)
+    (cl-flet ((special-case
+	       (thread)
+	       (let ((header (cl-first thread)))
+		 (if (stringp header)
+		     thread
+		   (list (mail-header-subject header) thread))))
+	      (has-refs
+	       (thread)
+	       (let ((header (cl-first thread)))
+		 (gnus-split-references (mail-header-references header)))))
+      (dolist (thread (seq-filter (lambda (thread) (not (has-refs thread))) threads))
+	(let* ((header (cl-first thread))
+	       (id (mail-header-id header))
+	       (thread-special (special-case thread)))
+	  (push thread-special result)
+	  (nnhackernews--sethash id thread-special threads-by-ref)))
+      (dolist (thread (seq-filter #'has-refs threads))
+	(let* ((header (cl-first thread))
+	       (refs (gnus-split-references (mail-header-references header))))
+	  (let ((ref-thread
+		 (cl-some (lambda (ref) (nnhackernews--gethash ref threads-by-ref)) refs)))
+	    (if ref-thread
+		(setcdr ref-thread (nconc (cdr ref-thread) (list thread)))
+	      (setq ref-thread (special-case thread))
+	      (push ref-thread result)
+	      (nnhackernews--sethash (car refs) ref-thread threads-by-ref)))))
+      (nreverse result))))
+
 (let ((custom-defaults
        ;; For now, revert any user overrides that I can't predict.
        (mapcar (lambda (x)
@@ -1526,7 +1559,7 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
                                   (gnus-add-timestamp-to-message t)
                                   (gnus-thread-sort-functions (quote (nnhackernews-sort-by-number-of-articles-in-thread)))
                                   (gnus-summary-thread-gathering-function
-                                   (quote gnus-gather-threads-by-references))
+                                   (quote nnhackernews-gather-threads-by-references))
                                   (gnus-subthread-sort-functions (quote (gnus-thread-sort-by-number)))
                                   (gnus-summary-display-article-function
                                    (quote ,(symbol-function 'nnhackernews--display-article)))
