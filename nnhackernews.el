@@ -643,7 +643,9 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
         (nnhackernews--rescore gnus-newsgroup-name t)))))
 
 (defun nnhackernews--mark-scored-as-read (group)
-  "If a root article (story) is scored in GROUP, that means we've already read it."
+  "If a root article (story) is scored in GROUP, that means we've already read it.
+This seems redundant with `nnhackernews--score-unread' but might be faster on startup?
+See 15195cc."
   (nnhackernews--with-group group
     (let ((preface (format "nnhackernews--mark-scored-as-read: %s not rescoring " group))
           (extant (nnhackernews-extant-summary-buffer gnus-newsgroup-name))
@@ -1608,15 +1610,15 @@ The built-in `gnus-gather-threads-by-references' is both."
                                      ,nnhackernews--group-job
                                      ,nnhackernews--group-stories)))))
       '(gnus-after-getting-new-news-hook))
-;; (add-hook 'gnus-started-hook
-;;           (lambda () (mapc (lambda (group)
-;;                              (nnhackernews--mark-scored-as-read group))
-;;                            `(,nnhackernews--group-ask
-;;                              ,nnhackernews--group-show
-;;                              ,nnhackernews--group-job
-;;                              ,nnhackernews--group-stories)))
-;;           t)
-
+;; Without this, I get Y's the first time around.  See 15195cc.
+(add-hook 'gnus-started-hook
+          (lambda () (mapc (lambda (group)
+                             (nnhackernews--mark-scored-as-read group))
+                           `(,nnhackernews--group-ask
+                             ,nnhackernews--group-show
+                             ,nnhackernews--group-job
+                             ,nnhackernews--group-stories)))
+          t)
 
 ;; "Can't figure out hook that can remove itself (quine conundrum)"
 (add-function :around (symbol-function 'gnus-summary-exit)
