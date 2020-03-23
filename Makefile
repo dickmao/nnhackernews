@@ -7,19 +7,14 @@ CASK_DIR := $(shell EMACS=$(EMACS) cask package-directory || exit 1)
 SRC=$(shell $(CASK) files)
 PKBUILD=2.3
 ELCFILES = $(SRC:.el=.elc)
-
-ifeq ($(TRAVIS_PULL_REQUEST_BRANCH),)
-TRAVIS_PULL_REQUEST_BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
+ifeq ($(GITHUB_REPOSITORY),)
+GITHUB_REPOSITORY := $(shell git config user.name)/$(shell basename `git rev-parse --show-toplevel`)
 endif
-ifeq ($(TRAVIS_PULL_REQUEST_SLUG),)
-ifeq ($(TRAVIS_PULL_REQUEST_BRANCH),HEAD)
-TRAVIS_PULL_REQUEST_SLUG := $(TRAVIS_REPO_SLUG)
-else
-TRAVIS_PULL_REQUEST_SLUG := $(shell git config --global user.name)/$(shell basename `git rev-parse --show-toplevel`)
+ifeq ($(GITHUB_BASE_REF),)
+GITHUB_BASE_REF := $(shell git rev-parse --abbrev-ref HEAD)
 endif
-endif
-ifeq ($(TRAVIS_PULL_REQUEST_SHA),)
-TRAVIS_PULL_REQUEST_SHA := $(shell git rev-parse origin/$(TRAVIS_PULL_REQUEST_BRANCH))
+ifeq ($(GITHUB_SHA),)
+GITHUB_SHA := $(shell if git show-ref --quiet --verify origin/$(GITHUB_BASE_REF) ; then git rev-parse origin/$(GITHUB_BASE_REF) ; fi))
 endif
 
 .DEFAULT_GOAL := test-compile
@@ -74,9 +69,9 @@ test-install:
 	--eval "(setq rcp (package-recipe-lookup \"nnhackernews\"))" \
 	--eval "(unless (file-exists-p package-build-archive-dir) \
 	           (make-directory package-build-archive-dir))" \
-	--eval "(let* ((my-repo \"$(TRAVIS_PULL_REQUEST_SLUG)\") \
-	               (my-branch \"$(TRAVIS_PULL_REQUEST_BRANCH)\") \
-	               (my-commit \"$(TRAVIS_PULL_REQUEST_SHA)\")) \
+	--eval "(let* ((my-repo \"$(GITHUB_REPOSITORY)\") \
+	               (my-branch \"$(GITHUB_BASE_REF)\") \
+	               (my-commit \"$(GITHUB_SHA)\")) \
 	           (oset rcp :repo my-repo) \
 	           (oset rcp :branch my-branch) \
 	           (oset rcp :commit my-commit))" \

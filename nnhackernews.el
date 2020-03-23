@@ -232,7 +232,7 @@ Normalize it to \"nnhackernews-default\"."
     (unless server
       (setq server canonical))
     (unless (string= server canonical)
-      (error "nnhackernews--normalize-server: multiple servers unsupported!"))))
+      (error "`nnhackernews--normalize-server': multiple servers unsupported!"))))
 
 (defvar nnhackernews-score-files nil "For `nnhackernews--ensure-score-file'.")
 
@@ -325,7 +325,7 @@ If NOQUERY, return nil and avoid querying if not extant."
     (insert html)
     (if (fboundp 'libxml-parse-html-region)
         (libxml-parse-html-region (point-min) (point-max))
-      (error "nnhackernews--domify: need libxml-parse-html-region"))))
+      (error "`nnhackernews--domify': need libxml-parse-html-region"))))
 
 (cl-defun nnhackernews--request-login-success (&key data &allow-other-keys)
   "Validate login depending on what DATA say.
@@ -643,9 +643,11 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
         (nnhackernews--rescore gnus-newsgroup-name t)))))
 
 (defun nnhackernews--mark-scored-as-read (group)
-  "If a root article (story) is scored in GROUP, that means we've already read it.
-This seems redundant with `nnhackernews--score-unread' but might be faster on startup?
-See 15195cc."
+  "Reflect the scoring results now.
+
+If root article (story) is scored in GROUP, that means we've already
+read it.  This seems redundant with `nnhackernews--score-unread' but might be
+faster on startup?  See 15195cc."
   (nnhackernews--with-group group
     (let ((preface (format "nnhackernews--mark-scored-as-read: %s not rescoring " group))
           (extant (nnhackernews-extant-summary-buffer gnus-newsgroup-name))
@@ -858,7 +860,7 @@ Request shall contain ATTRIBUTES, one of which is PARSER of the response, if pro
 (defsubst nnhackernews--enforce-curl ()
   "Curl must exist."
   (unless (executable-find "curl")
-    (error "nnhackernews--enforce-curl: the 'curl' program was not found")))
+    (error "`nnhackernews--enforce-curl': the 'curl' program was not found")))
 
 (defun nnhackernews--request-reply (url text hidden)
   "Reply URL with TEXT using HIDDEN credentials."
