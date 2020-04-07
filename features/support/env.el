@@ -16,6 +16,9 @@
 (require 'nnhackernews-test)
 (require 'cl) ;; for auth-source
 
+(when (and (<= emacs-major-version 25) (getenv "GITHUB_ACTIONS"))
+  (!cons "vote_reply_login" ecukes-exclude-tags))
+
 (defvar incoming-iteration 0 "Used in filter-args advice of `nnhackernews--incoming'.")
 
 (defmacro if-demote (demote &rest forms)
