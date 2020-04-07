@@ -46,7 +46,7 @@ clean: test-clean
 
 .PHONY: test-compile
 test-compile: cask
-	sh -ex tools/package-lint.sh nnhackernews.el
+	-sh -ex tools/package-lint.sh nnhackernews.el
 	! ($(CASK) eval "(let ((byte-compile-error-on-warn t)) (cask-cli/build))" 2>&1 | egrep -a "(Warning|Error):")
 	$(CASK) clean-elc
 
