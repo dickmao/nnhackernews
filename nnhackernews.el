@@ -1784,14 +1784,18 @@ The built-in `gnus-gather-threads-by-references' is both."
           (format "\\(%s\\)\\|\\(^nnhackernews\\)" it)
         "^nnhackernews"))
 
-(custom-set-variables
- '(gnus-score-after-write-file-function
-   (lambda (file)
-     (when (nnhackernews--gate)
-       (unless (member file (alist-get (intern gnus-newsgroup-name)
-                                       nnhackernews-score-files))
-         (push file (alist-get (intern gnus-newsgroup-name)
-                               nnhackernews-score-files)))))))
+;; I would use custom-set-variables, but that mucks with the user's .emacs.
+;; I suspect I did try putting this in `gnus-parameters' but out-of-band.
+(let ((update-score-files
+       (lambda (file)
+	 (when (nnhackernews--gate)
+	   (unless (member file (alist-get (intern gnus-newsgroup-name)
+					   nnhackernews-score-files))
+	     (push file (alist-get (intern gnus-newsgroup-name)
+				   nnhackernews-score-files)))))))
+  (if gnus-score-after-write-file-function
+      (add-function :after gnus-score-after-write-file-function update-score-files)
+    (setq gnus-score-after-write-file-function update-score-files)))
 
 ;; (push '((and (eq (car gnus-current-select-method) 'nnhackernews)
 ;;              (eq mark gnus-unread-mark)
