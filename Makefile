@@ -20,11 +20,10 @@ endif
 .DEFAULT_GOAL := test-compile
 
 README.rst: README.in.rst nnhackernews.el
-	sed "/CI VERSION/c"`grep -o 'emacs-[0-9][.0-9]*' .travis.yml | sort -n | head -1 | grep -o '[.0-9]*'` README.in.rst > README.rst0
 	grep ';;' nnhackernews.el \
 	    | awk '/;;;\s*Commentary/{within=1;next}/;;;\s*/{within=0}within' \
 	    | sed -e 's/^\s*;;*\s*//g' \
-	    | tools/readme-sed.sh "COMMENTARY" README.rst0 > README.rst
+	    | tools/readme-sed.sh "COMMENTARY" README.in.rst > README.rst
 	rm -f README.rst0 README.rst1
 
 .PHONY: test-clean

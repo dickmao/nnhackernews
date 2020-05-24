@@ -5,8 +5,8 @@
 A Gnus backend for Hacker News.
 
 .. |build-status|
-   image:: https://travis-ci.com/dickmao/nnhackernews.svg?branch=master
-   :target: https://travis-ci.com/dickmao/nnhackernews
+   image:: https://github.com/dickmao/nnhackernews/workflows/CI/badge.svg?branch=master
+   :target: https://github.com/dickmao/nnhackernews/actions
    :alt: Build Status
 .. |melpa-dev|
    image:: https://melpa.org/packages/nnhackernews-badge.svg
