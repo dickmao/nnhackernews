@@ -54,6 +54,10 @@
 (require 'anaphora)
 (require 'url-http)
 
+(eval-when-compile
+  (unless (fboundp 'libxml-parse-xml-region)
+    (display-warning 'nnreddit "nnreddit requires libxml support")))
+
 (nnoo-declare nnhackernews)
 
 (defconst nnhackernews-hacker-news-url "https://news.ycombinator.com")
