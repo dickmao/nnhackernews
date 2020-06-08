@@ -88,6 +88,9 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
 
 (defvoo nnhackernews-status-string "")
 
+(defvar nnhackernews-avoid-rescoring nil
+  "Semaphore to avoid unnecessary scoring run caused by `nndraft-update-unread-articles' calling `gnus-group-get-new-news-this-group'")
+
 (defvar nnhackernews--mutex-display-article (when (fboundp 'make-mutex)
                                       (make-mutex "nnhackernews--mutex-display-article"))
   "Scoring runs via `gnus-after-getting-new-news-hook' cause 'Selecting deleted buffer'.")
@@ -639,7 +642,8 @@ Otherwise *Group* buffer annoyingly overrepresents unread."
   (when (or (gnus-native-method-p '(nnhackernews ""))
             (gnus-secondary-method-p '(nnhackernews "")))
     (nnhackernews--with-group group
-      (unless (nnhackernews-extant-summary-buffer gnus-newsgroup-name)
+      (unless (or (nnhackernews-extant-summary-buffer gnus-newsgroup-name)
+		  nnhackernews-avoid-rescoring)
         (nnhackernews--rescore gnus-newsgroup-name t)))))
 
 (defun nnhackernews--mark-scored-as-read (group)
@@ -1214,12 +1218,15 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
   (with-current-buffer nntp-server-buffer
     (erase-buffer)
     (mapc (lambda (group)
-            (let ((full-name (gnus-group-full-name group `("nnhackernews" ,(or server "")))))
-              (gnus-activate-group full-name t)
-              (when (> (gnus-group-level full-name) gnus-level-subscribed)
-                (gnus-group-unsubscribe-group full-name gnus-level-default-subscribed t)))
-            (insert (format "%s %d 1 y\n" group
-                            (length (nnhackernews-get-headers group)))))
+            (let* ((full-name (gnus-group-full-name group `("nnhackernews" ,(or server ""))))
+		   (level (gnus-group-level full-name)))
+	      (gnus-activate-group full-name t)
+	      (when (> level gnus-level-zombie)
+		;; Can't know if first time or gnus-level-killed group.
+		(gnus-group-unsubscribe-group full-name gnus-level-default-subscribed t))
+	      (when (<= level gnus-level-subscribed)
+		(insert (format "%s %d 1 y\n" group
+				(length (nnhackernews-get-headers group)))))))
           `(,nnhackernews--group-ask
             ,nnhackernews--group-show
             ,nnhackernews--group-job
@@ -1603,15 +1610,14 @@ The built-in `gnus-gather-threads-by-references' is both."
 (add-hook 'gnus-summary-mode-hook #'nnhackernews-summary-mode-activate)
 
 ;; Avoid having to select the GROUP to make the unread number go down.
-(mapc (lambda (hook)
-        (add-hook hook
-                  (lambda () (mapc (lambda (group)
-                                     (nnhackernews--score-unread group))
-                                   `(,nnhackernews--group-ask
-                                     ,nnhackernews--group-show
-                                     ,nnhackernews--group-job
-                                     ,nnhackernews--group-stories)))))
-      '(gnus-after-getting-new-news-hook))
+(add-hook 'gnus-after-getting-new-news-hook
+	  (lambda () (mapc (lambda (group)
+			     (nnhackernews--score-unread group))
+			   `(,nnhackernews--group-ask
+			     ,nnhackernews--group-show
+			     ,nnhackernews--group-job
+			     ,nnhackernews--group-stories))))
+
 ;; Without this, I get Y's the first time around.  See 15195cc.
 (add-hook 'gnus-started-hook
           (lambda () (mapc (lambda (group)
@@ -1777,6 +1783,13 @@ The built-in `gnus-gather-threads-by-references' is both."
                  (symbol-function 'nnhackernews--display-article)))
             (apply f args)))
          (t (apply f args)))))
+
+(add-function
+ :around (symbol-function 'gnus-group-get-new-news-this-group)
+ (lambda (f &rest args)
+   "Semaphore down `nnhackernews-avoid-rescoring'."
+   (let ((nnhackernews-avoid-rescoring t))
+     (apply f args))))
 
 ;; disallow caching as firebase might change the article numbering?
 (setq gnus-uncacheable-groups
