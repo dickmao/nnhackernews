@@ -322,7 +322,7 @@ If NOQUERY, return nil and avoid querying if not extant."
                    until result
                    finally return result)))))
 
-(defsubst nnhackernews--domify (html)
+(defun nnhackernews--domify (html)
   "Parse HTML into dom."
   (with-temp-buffer
     (insert html)
