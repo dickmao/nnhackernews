@@ -89,7 +89,7 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
 (defvoo nnhackernews-status-string "")
 
 (defvar nnhackernews-avoid-rescoring nil
-  "Semaphore to avoid unnecessary scoring run caused by `nndraft-update-unread-articles' calling `gnus-group-get-new-news-this-group'")
+  "Semaphore to avoid unnecessary scoring run caused by `nndraft-update-unread-articles' calling `gnus-group-get-new-news-this-group'.")
 
 (defvar nnhackernews--mutex-display-article (when (fboundp 'make-mutex)
                                       (make-mutex "nnhackernews--mutex-display-article"))
@@ -268,25 +268,27 @@ If NOQUERY, return nil and avoid querying if not extant."
     (unless noquery
       (nnhackernews--request-item id))))
 
-(defsubst nnhackernews-refs-for (id)
-  "Return descending ancestors as list for ID."
-  (cl-loop with root-plst
+(defun nnhackernews-refs-for (id)
+  "Return ancestors sorted oldest to youngest as list for ID."
+  (cl-loop with get-root-plst = #'ignore
            for prev-id = id then cur-id
            for cur-id =
            (let ((cached (nnhackernews--gethash prev-id
                                                 nnhackernews-refs-hashtb
                                                 'NULL)))
              (if (eq cached 'NULL)
-                 (progn (setq root-plst (nnhackernews--request-item prev-id))
-                        (nnhackernews-add-entry nnhackernews-refs-hashtb
-                                                root-plst :parent)
-                        (plist-get root-plst :parent))
-               (setq root-plst (nnhackernews-find-header prev-id t))
+                 (let ((plst (nnhackernews--request-item prev-id)))
+                   (nnhackernews-add-entry nnhackernews-refs-hashtb
+                                           plst :parent)
+                   (setq get-root-plst (lambda () plst))
+                   (plist-get plst :parent))
+               (setq get-root-plst (apply-partially #'nnhackernews-find-header prev-id t))
                cached))
            until (null cur-id)
            collect cur-id into rresult
            finally do
-           (let ((result (nreverse rresult)))
+           (let ((result (nreverse rresult))
+                 (root-plst (funcall get-root-plst)))
              (when (and result
                         (string= (plist-get root-plst :id) (car result)))
                (nnhackernews--sethash (car result) root-plst
@@ -996,12 +998,13 @@ Factor out commonality between text and link submit."
                                              'utf-8)))
         plst)
     (add-function :filter-return (symbol-function 'json-read-string) utf-decoder)
-    (nnhackernews--request
-     "nnhackernews--request-item"
-     (format "https://hacker-news.firebaseio.com/v0/item/%s.json" id)
-     :parser 'nnhackernews--json-read
-     :success (nnhackernews--callback plst))
-    (remove-function (symbol-function 'json-read-string) utf-decoder)
+    (unwind-protect
+	(nnhackernews--request
+	 "nnhackernews--request-item"
+	 (format "https://hacker-news.firebaseio.com/v0/item/%s.json" id)
+	 :parser 'nnhackernews--json-read
+	 :success (nnhackernews--callback plst))
+      (remove-function (symbol-function 'json-read-string) utf-decoder))
     (when-let ((id (plist-get plst :id)))
       (when (numberp id)
         (setq plst (plist-put plst :id (number-to-string id))))
@@ -1199,6 +1202,13 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
             (gnus-message 2 "nnhackernews-request-article: Invalid mml:\n%s"
                           (buffer-string)))
           (cons group article-number))))))
+
+(defun nnhackernews-purge-refs ()
+  "`nnhackernews-refs-hashtb' gets too big for its britches."
+  (interactive)
+  (let ((headers (nnhackernews-get-headers "news")))
+    (dolist (header (cl-subseq headers 0 (truncate (* 0.5 (length headers)))))
+      (nnhackernews--remhash (plist-get header :id) nnhackernews-refs-hashtb))))
 
 (deffoo nnhackernews-retrieve-headers (article-numbers &optional group server _fetch-old)
   (nnhackernews--normalize-server)
