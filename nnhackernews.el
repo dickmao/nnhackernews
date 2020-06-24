@@ -109,6 +109,47 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
                                     (apply ,callback args)
                                   data)))))
 
+(defun nnhackernews-alist-get (key alist &optional default remove testfn)
+  "Replicated library function for emacs-25.
+
+Same argument meanings for KEY ALIST DEFAULT REMOVE and TESTFN."
+  (ignore remove)
+  (let ((x (if (not testfn)
+               (assq key alist)
+             (assoc key alist))))
+    (if x (cdr x) default)))
+
+(gv-define-expander nnhackernews-alist-get
+  (lambda (do key alist &optional default remove testfn)
+    (macroexp-let2 macroexp-copyable-p k key
+      (gv-letplace (getter setter) alist
+        (macroexp-let2 nil p `(if (and ,testfn (not (eq ,testfn 'eq)))
+                                  (assoc ,k ,getter)
+                                (assq ,k ,getter))
+          (funcall do (if (null default) `(cdr ,p)
+                        `(if ,p (cdr ,p) ,default))
+                   (lambda (v)
+                     (macroexp-let2 nil v v
+                       (let ((set-exp
+                              `(if ,p (setcdr ,p ,v)
+                                 ,(funcall setter
+                                           `(cons (setq ,p (cons ,k ,v))
+                                                  ,getter)))))
+                         `(progn
+                            ,(cond
+                             ((null remove) set-exp)
+                             ((or (eql v default)
+                                  (and (eq (car-safe v) 'quote)
+                                       (eq (car-safe default) 'quote)
+                                       (eql (cadr v) (cadr default))))
+                              `(if ,p ,(funcall setter `(delq ,p ,getter))))
+                             (t
+                              `(cond
+                                ((not (eql ,default ,v)) ,set-exp)
+                                (,p ,(funcall setter
+                                              `(delq ,p ,getter))))))
+                            ,v))))))))))
+
 (defsubst nnhackernews--gethash (string hashtable &optional dflt)
   "Get corresponding value of STRING from HASHTABLE, or DFLT if undefined.
 
@@ -245,8 +286,8 @@ Normalize it to \"nnhackernews-default\"."
 (defvar nnhackernews-root-hashtb (gnus-make-hashtable)
   "Id -> possibly ancient header.")
 
-(defvar nnhackernews-headers-hashtb (gnus-make-hashtable)
-  "Group -> headers.")
+(defvar nnhackernews-headers-alist nil
+  "Group -> headers.  This is an alist.  Hashtable mysteriously slow.")
 
 (defvar nnhackernews-refs-hashtb (gnus-make-hashtable)
   "Who replied to whom (global over all entries).")
@@ -254,9 +295,9 @@ Normalize it to \"nnhackernews-default\"."
 (defvar nnhackernews-authors-hashtb (gnus-make-hashtable)
   "For fast lookup of parent-author (global over all entries).")
 
-(defsubst nnhackernews-get-headers (group)
+(defun nnhackernews-get-headers (group)
   "List headers from GROUP."
-  (nnhackernews--gethash group nnhackernews-headers-hashtb))
+  (cl-second (assoc group nnhackernews-headers-alist)))
 
 (defun nnhackernews-find-header (id &optional noquery)
   "Retrieve property list of ID.
@@ -286,14 +327,14 @@ If NOQUERY, return nil and avoid querying if not extant."
                cached))
            until (null cur-id)
            collect cur-id into rresult
-           finally do
-           (let ((result (nreverse rresult))
+           finally return
+	   (let ((result (nreverse rresult))
                  (root-plst (funcall get-root-plst)))
              (when (and result
                         (string= (plist-get root-plst :id) (car result)))
                (nnhackernews--sethash (car result) root-plst
                                       nnhackernews-root-hashtb))
-             (cl-return result))))
+             result)))
 
 (defun nnhackernews--retrieve-root (header)
   "Retrieve and cache property list HEADER root."
@@ -422,13 +463,12 @@ Remember `string-match-p' is always case-insensitive as is all elisp pattern mat
   "Update data structures for PLST \"header\".
 
 If GROUP classification omitted, figure it out."
-  (let* ((id (plist-get plst :id))
-         (group (or group (nnhackernews--group-for plst))))
+  (let ((id (plist-get plst :id))
+	(group (or group (nnhackernews--group-for plst))))
     (nnhackernews--sethash id
                            (cons group (length (nnhackernews-get-headers group)))
                            nnhackernews-location-hashtb)
-    (nnhackernews--sethash group (nconc (nnhackernews-get-headers group) (list plst))
-                           nnhackernews-headers-hashtb)
+    (setf (nnhackernews-alist-get group nnhackernews-headers-alist nil nil #'equal) (list (nconc (nnhackernews-get-headers group) (list plst))))
     plst))
 
 (nnoo-define-basics nnhackernews)
@@ -440,8 +480,9 @@ If GROUP classification omitted, figure it out."
                                  (cdr gnus-article-current))
                                (with-current-buffer gnus-summary-buffer
                                  (gnus-summary-article-number)))))
-      (let* ((header (nnhackernews--get-header article-number
-                                           (gnus-group-real-name gnus-newsgroup-name)))
+      (let* ((header (nnhackernews--get-header
+		      article-number
+                      (gnus-group-real-name gnus-newsgroup-name)))
              (orig-score (format "%s" (plist-get header :score)))
              (new-score (if (zerop vote) orig-score
                           (concat orig-score " "
@@ -695,7 +736,7 @@ faster on startup?  See 15195cc."
   "Ensure header tallies agree.
 
 The two hashtables being reconciled are `nnhackernews-location-hashtb' and
-`nnhackernews-headers-hashtb'."
+`nnhackernews-headers-alist'."
   (let ((counts (gnus-make-hashtable)))
     (nnhackernews--maphash
      (lambda (_id group-index)
@@ -703,15 +744,16 @@ The two hashtables being reconciled are `nnhackernews-location-hashtb' and
                                    counts))
      nnhackernews-location-hashtb)
 
-    (nnhackernews--maphash
-     (lambda (group headers)
-       (cl-assert (= (nnhackernews--gethash group counts 0)
-                     (length headers))
-                  nil
-                  "nnhackernews--checksum: %s, %s != %s"
-                  group (nnhackernews--gethash group counts 0)
-                  (length headers)))
-     nnhackernews-headers-hashtb)
+    (mapc
+     (lambda (pair)
+       (cl-destructuring-bind (group headers) pair
+	 (cl-assert (= (nnhackernews--gethash group counts 0)
+		       (length headers))
+		    nil
+		    "nnhackernews--checksum: %s, %s != %s"
+		    group (nnhackernews--gethash group counts 0)
+		    (length headers))))
+     nnhackernews-headers-alist)
 
     (let (result)
       (nnhackernews--maphash
@@ -1124,15 +1166,14 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
   (mapconcat (lambda (ref) (nnhackernews--make-message-id ref))
              (nnhackernews-refs-for id) " "))
 
-(defsubst nnhackernews--make-header (article-number &optional group)
-  "Construct full headers of articled indexed ARTICLE-NUMBER in GROUP."
-  (let* ((header (nnhackernews--get-header article-number group))
-         (score (plist-get header :score))
-         (num-comments (plist-get header :num_comments)))
+(defsubst nnhackernews--make-header (article-number header)
+  "Construct full headers of articled indexed ARTICLE-NUMBER and HEADER."
+  (let ((score (plist-get header :score))
+        (num-comments (plist-get header :num_comments)))
     (make-full-mail-header
      article-number
      (replace-regexp-in-string "\\S-+ HN: " ""
-                               (or (plist-get header :title)
+			       (or (plist-get header :title)
                                    (plist-get header :link_title)))
      (plist-get header :by)
      (format-time-string "%a, %d %h %Y %T %z (%Z)" (plist-get header :time))
@@ -1154,7 +1195,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
     (with-current-buffer buffer
       (erase-buffer)
       (let* ((header (nnhackernews--get-header article-number group))
-             (mail-header (nnhackernews--make-header article-number))
+             (mail-header (nnhackernews--make-header article-number header))
              (score (cdr (assq 'X-Hackernews-Score (mail-header-extra mail-header))))
              (permalink (cdr (assq 'X-Hackernews-Permalink (mail-header-extra mail-header))))
              (body (nnhackernews--massage (nnhackernews--get-body header server))))
@@ -1204,7 +1245,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
           (cons group article-number))))))
 
 (defun nnhackernews-purge-refs ()
-  "`nnhackernews-refs-hashtb' gets too big for its britches."
+  "The size of `nnhackernews-refs-hashtb' is not the problem!"
   (interactive)
   (let ((headers (nnhackernews-get-headers "news")))
     (dolist (header (cl-subseq headers 0 (truncate (* 0.5 (length headers)))))
@@ -1215,9 +1256,10 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
   (nnhackernews--with-group group
     (with-current-buffer nntp-server-buffer
       (erase-buffer)
-      (dolist (i article-numbers)
-        (nnheader-insert-nov (nnhackernews--make-header i group)))
-      'nov)))
+      (let ((headers (nnhackernews-get-headers group)))
+	(dolist (i article-numbers)
+          (nnheader-insert-nov (nnhackernews--make-header i (elt headers (1- i)))))
+	'nov))))
 
 (deffoo nnhackernews-close-server (&optional server _defs)
   (nnhackernews--normalize-server)
