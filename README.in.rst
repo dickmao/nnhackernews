@@ -1,4 +1,4 @@
-|build-status|
+|build-status| |melpa-dev|
 
   Procrastination can be a full-time job.
 
