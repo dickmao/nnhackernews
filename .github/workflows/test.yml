@@ -4,6 +4,7 @@ on:
   push:
     paths-ignore:
     - '**.md'
+    - '**.rst'
     branches-ignore:
     - 'master'
 
