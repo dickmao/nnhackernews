@@ -76,6 +76,11 @@ Do not set this to \"localhost\" as a numeric IP is required for the oauth hands
   :type 'string
   :group 'nnhackernews)
 
+(defcustom nnhackernews-purge-threshold 30000
+  "When number of headers exceeds this, call `nnhackernews-purge'."
+  :type 'integer
+  :group 'nnhackernews)
+
 (defcustom nnhackernews-max-items-per-scan 100
   "Maximum items to fetch from firebase each refresh cycle."
   :type 'integer
@@ -542,8 +547,7 @@ If GROUP classification omitted, figure it out."
 (defun nnhackernews--get-header (article-number &optional group)
   "Get header indexed ARTICLE-NUMBER for GROUP."
   (nnhackernews--with-group group
-    (let ((headers (nnhackernews-get-headers group)))
-      (elt headers (1- article-number)))))
+    (elt (nnhackernews-get-headers group) (1- article-number))))
 
 (defun nnhackernews--get-body (header &optional server)
   "Get full text of submission or comment HEADER at SERVER."
@@ -649,8 +653,8 @@ FORCE is generally t unless coming from `nnhackernews--score-pending'."
     (let* ((num-headers (length (nnhackernews-get-headers
                                  (gnus-group-real-name group))))
            (marks (gnus-info-marks (gnus-get-info group)))
-           (seen (or (cdr (--max-by (> (or (cdr it) 0) (or (cdr other) 0))
-                                    (alist-get 'seen marks)))
+           (seen (or (cdr-safe (--max-by (> (or (cdr-safe it) 0) (or (cdr-safe other) 0))
+                                         (alist-get 'seen marks)))
                      0)))
       (unless (zerop seen)
         (when (or force (> num-headers seen))
@@ -1166,14 +1170,15 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
   (mapconcat (lambda (ref) (nnhackernews--make-message-id ref))
              (nnhackernews-refs-for id) " "))
 
-(defsubst nnhackernews--make-header (article-number header)
-  "Construct full headers of articled indexed ARTICLE-NUMBER and HEADER."
-  (let ((score (plist-get header :score))
-        (num-comments (plist-get header :num_comments)))
+(defun nnhackernews--make-header (article-number &optional group)
+  "Construct full headers of articled indexed ARTICLE-NUMBER in GROUP."
+  (let* ((header (nnhackernews--get-header article-number group))
+         (score (plist-get header :score))
+         (num-comments (plist-get header :num_comments)))
     (make-full-mail-header
      article-number
      (replace-regexp-in-string "\\S-+ HN: " ""
-			       (or (plist-get header :title)
+                               (or (plist-get header :title)
                                    (plist-get header :link_title)))
      (plist-get header :by)
      (format-time-string "%a, %d %h %Y %T %z (%Z)" (plist-get header :time))
@@ -1195,7 +1200,7 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
     (with-current-buffer buffer
       (erase-buffer)
       (let* ((header (nnhackernews--get-header article-number group))
-             (mail-header (nnhackernews--make-header article-number header))
+             (mail-header (nnhackernews--make-header article-number))
              (score (cdr (assq 'X-Hackernews-Score (mail-header-extra mail-header))))
              (permalink (cdr (assq 'X-Hackernews-Permalink (mail-header-extra mail-header))))
              (body (nnhackernews--massage (nnhackernews--get-body header server))))
@@ -1244,22 +1249,56 @@ Optionally provide STATIC-MAX-ITEM and STATIC-NEWSTORIES to prevent querying out
                           (buffer-string)))
           (cons group article-number))))))
 
-(defun nnhackernews-purge-refs ()
+(defsubst nnhackernews--shift-ranges (delta ranges)
+  "Shift back by DELTA the elements of RANGES, removing any negative entries."
+  (cl-remove-if-not (lambda (e)
+                      (cond ((numberp e) (> e 0))
+                            (t (> (cdr e) 0))))
+                    (mapcar (lambda (e)
+                              (cond ((numberp e) (- e delta))
+                                    (t `(,(max 1 (- (car e) delta)) .
+                                         ,(- (cdr e) delta)))))
+                            ranges)))
+
+(defun nnhackernews-purge ()
   "The size of `nnhackernews-refs-hashtb' is not the problem!"
   (interactive)
-  (let ((headers (nnhackernews-get-headers "news")))
-    (dolist (header (cl-subseq headers 0 (truncate (* 0.5 (length headers)))))
-      (nnhackernews--remhash (plist-get header :id) nnhackernews-refs-hashtb))))
+  (nnhackernews--with-group "news"
+    (let* ((headers (nnhackernews-get-headers group))
+           (delta (truncate (* 0.5 (length headers))))
+           (info (gnus-get-info gnus-newsgroup-name))
+           (remaining (nthcdr delta headers))
+           (newsrc-read-ranges (gnus-info-read info))
+           (newsrc-mark-ranges (gnus-info-marks info))
+           (newsrc-read-ranges-shifted
+            (nnhackernews--shift-ranges delta newsrc-read-ranges))
+           (newsrc-mark-ranges-shifted
+            (mapcar (lambda (what-ranges)
+                      (cl-case (car what-ranges)
+                        ('seen `(seen (1 . ,(length remaining))))
+                        (t (cons (car what-ranges)
+                                 (nnhackernews--shift-ranges delta (cdr what-ranges))))))
+                    newsrc-mark-ranges)))
+      (dolist (id (mapcar (lambda (header) (plist-get header :id))
+                          (cl-subseq headers 0 delta)))
+        (nnhackernews--remhash id nnhackernews-refs-hashtb)
+        (nnhackernews--remhash id nnhackernews-location-hashtb)
+        (nnhackernews--remhash id nnhackernews-authors-hashtb))
+      (setf (gnus-info-read info) newsrc-read-ranges-shifted)
+      (gnus-set-active gnus-newsgroup-name (cons 1 (length remaining)))
+      (gnus-info-set-marks info newsrc-mark-ranges-shifted)
+      (gnus-set-info gnus-newsgroup-name info)
+      (setf (nnhackernews-alist-get group nnhackernews-headers-alist nil nil #'equal)
+            (list remaining)))))
 
 (deffoo nnhackernews-retrieve-headers (article-numbers &optional group server _fetch-old)
   (nnhackernews--normalize-server)
   (nnhackernews--with-group group
     (with-current-buffer nntp-server-buffer
       (erase-buffer)
-      (let ((headers (nnhackernews-get-headers group)))
-	(dolist (i article-numbers)
-          (nnheader-insert-nov (nnhackernews--make-header i (elt headers (1- i)))))
-	'nov))))
+      (dolist (i article-numbers)
+        (nnheader-insert-nov (nnhackernews--make-header i group)))
+      'nov)))
 
 (deffoo nnhackernews-close-server (&optional server _defs)
   (nnhackernews--normalize-server)
@@ -1640,7 +1679,8 @@ The built-in `gnus-gather-threads-by-references' is both."
     (nnhackernews-article-mode)))
 
 (deffoo nnhackernews-request-expire-articles (articles &optional group server _force)
-  "Preserving indices so `nnhackernews-find-header' still works."
+  "Never gets called sinced I turned off total . expire.
+Preserving indices so `nnhackernews-find-header' still works."
   (nnhackernews--normalize-server)
   (nnhackernews--with-group group
     (dolist (art articles)
@@ -1663,12 +1703,16 @@ The built-in `gnus-gather-threads-by-references' is both."
 
 ;; Avoid having to select the GROUP to make the unread number go down.
 (add-hook 'gnus-after-getting-new-news-hook
-	  (lambda () (mapc (lambda (group)
-			     (nnhackernews--score-unread group))
-			   `(,nnhackernews--group-ask
-			     ,nnhackernews--group-show
-			     ,nnhackernews--group-job
-			     ,nnhackernews--group-stories))))
+	  (lambda ()
+            (when (> (length (nnhackernews-get-headers "news"))
+                     nnhackernews-purge-threshold)
+              (nnhackernews-purge))
+            (mapc (lambda (group)
+                    (nnhackernews--score-unread group))
+                  `(,nnhackernews--group-ask
+                    ,nnhackernews--group-show
+                    ,nnhackernews--group-job
+                    ,nnhackernews--group-stories))))
 
 ;; Without this, I get Y's the first time around.  See 15195cc.
 (add-hook 'gnus-started-hook

@@ -81,6 +81,9 @@
              (if negate (not says) says)))
          nil 5000 1000)))
 
+(When "^eval \"\\(.*\\)\"$"
+  (lambda (command)
+    (eval (car (read-from-string command)))))
 
 ;; (When "^I scuzz \"\\(.+\\)\"$"
 ;;       (lambda (buffer)

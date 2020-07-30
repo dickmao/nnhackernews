@@ -97,7 +97,7 @@ dist: dist-clean
 	$(CASK) package
 
 .PHONY: install
-install: test-compile dist
+install: dist
 	$(EMACS) -Q --batch --eval "(package-initialize)" \
 	  --eval "(add-to-list 'package-archives '(\"melpa\" . \"http://melpa.org/packages/\"))" \
 	  --eval "(package-refresh-contents)" \

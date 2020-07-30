@@ -151,7 +151,7 @@ And if so, 2-SYM, etc. until (N-1)-SYM, then return N-SYM."
          (with-scenario scenario
            (when scenario-recording-p
              (setq scenario-recording-alist
-                   (gnus-delete-alist 'touched scenario-recording-alist))
+                   (assq-delete-all 'touched scenario-recording-alist))
              (gnus-make-directory (file-name-directory filename))
              (with-temp-buffer
                (gnus-prin1 scenario-recording-alist)
