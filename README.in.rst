@@ -17,6 +17,10 @@
    :target: http://melpa-stable.milkbox.net/#/ein
    :alt: MELPA stable version
 
+.. image:: https://i.ytimg.com/an_webp/T43H5sQvi18/mqdefault_6s.webp?du=3000&sqp=CNza-PwF&rs=AOn4CLC0e3UmHGiZJkUXcpRrSr9ISWxO8w
+   :target: https://youtu.be/T43H5sQvi18
+   :alt: Replacing Thunderbird With Gnus
+
 .. image:: screencast.gif
 
 Install
