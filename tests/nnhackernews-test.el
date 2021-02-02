@@ -83,4 +83,12 @@
            (t (setf (nthcdr 1 args) (list nil (getenv "HNPASSWORD"))))))
    args))
 
+;; to save myself from having to recreate the cassettes
+(dolist (elem gnus-parameters)
+  (when (string-match-p (car elem) "nnhackernews")
+    (setf (alist-get 'gnus-thread-sort-functions (cdr elem))
+          '(nnhackernews-sort-by-number-of-articles-in-thread))
+    (setf (alist-get 'gnus-summary-thread-gathering-function (cdr elem))
+          'nnhackernews-gather-threads-by-references)))
+
 (provide 'nnhackernews-test)

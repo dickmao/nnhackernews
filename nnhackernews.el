@@ -62,6 +62,9 @@
 (defconst nnhackernews--group-job "job")
 (defconst nnhackernews--group-stories "news")
 
+(defgroup nnhackernews nil "A Gnus backend for Hacker News."
+  :group 'gnus)
+
 (defcustom nnhackernews-render-story t
   "If non-nil, follow link upon `gnus-summary-select-article'.
 
@@ -207,7 +210,7 @@ Starting in emacs-src commit c1b63af, Gnus moved from obarrays to normal hashtab
          `(lambda (k) (funcall
                        (apply-partially
                         ,func
-                        (symbol-name k) (gnus-gethash-safe k ,table))))
+                        (symbol-name k) (funcall (function gnus-gethash-safe) k ,table))))
        func)
     ,table))
 
@@ -1591,8 +1594,28 @@ Written by John Wiegley (https://github.com/jwiegley/dot-emacs).")
 (fset 'gnus-user-format-function-S
       (symbol-function 'nnhackernews--format-time-elapsed))
 
+(defun nnhackernews-sort-scored-then-responses (t1 t2)
+  "Scored first.  Then whichever of T1 or T2 has more responses.
+Modified `gnus-thread-sort-by-score'."
+  (let* ((h1 (gnus-thread-header t1))
+         (h2 (gnus-thread-header t2))
+         (s1 (or (cdr (assq (mail-header-number h1)
+		            gnus-newsgroup-scored))
+                 gnus-summary-default-score 0))
+         (s2 (or (cdr (assq (mail-header-number h2)
+		            gnus-newsgroup-scored))
+                 gnus-summary-default-score 0)))
+    (cond ((and (> s1 gnus-summary-default-high-score)
+                (< s2 gnus-summary-default-high-score))
+           t)
+          ((and (> s2 gnus-summary-default-high-score)
+                (< s1 gnus-summary-default-high-score))
+           nil)
+          (t (> (gnus-summary-number-of-articles-in-thread t1)
+                (gnus-summary-number-of-articles-in-thread t2))))))
+
 (defun nnhackernews-sort-by-number-of-articles-in-thread (t1 t2)
-  "Whichever of the T1 or T2 has the most articles."
+  "Whichever of T1 or T2 has more responses."
   (> (gnus-summary-number-of-articles-in-thread t1)
      (gnus-summary-number-of-articles-in-thread t2)))
 
@@ -1608,7 +1631,7 @@ The built-in `gnus-gather-threads-by-references' is both."
 	    (has-refs
 	     (thread)
 	     (let ((header (cl-first thread)))
-	       (gnus-split-references (mail-header-references header)))))
+               (gnus-split-references (mail-header-references header)))))
     (let ((threads-by-ref (gnus-make-hashtable))
 	  (separated (-separate #'has-refs threads))
 	  result)
@@ -1630,6 +1653,15 @@ The built-in `gnus-gather-threads-by-references' is both."
 	    (push ref-thread result)
 	    (nnhackernews--sethash (car refs) ref-thread threads-by-ref))))
       (nreverse result))))
+
+(defun nnhackernews-gather-then-sort (threads)
+  "Gather THREADS by root, then sort.
+Gnus, for whatever reason, first sorts threads then collates, thus breaking
+the initial sort.  Circumvent this stupidity."
+  (let ((gnus-thread-sort-functions
+         (list 'nnhackernews-sort-scored-then-responses)))
+    (gnus-sort-threads
+     (nnhackernews-gather-threads-by-references threads))))
 
 (let ((custom-defaults
        ;; For now, revert any user overrides that I can't predict.
@@ -1661,9 +1693,9 @@ The built-in `gnus-gather-threads-by-references' is both."
                                   (gnus-summary-line-format "%3t%U%R%uS %I%(%*%-10,10f  %s%)\n")
                                   (gnus-auto-extend-newsgroup nil)
                                   (gnus-add-timestamp-to-message t)
-                                  (gnus-thread-sort-functions (quote (nnhackernews-sort-by-number-of-articles-in-thread)))
+                                  (gnus-thread-sort-functions (quote (ignore)))
                                   (gnus-summary-thread-gathering-function
-                                   (quote nnhackernews-gather-threads-by-references))
+                                   (quote nnhackernews-gather-then-sort))
                                   (gnus-subthread-sort-functions (quote (gnus-thread-sort-by-number)))
                                   (gnus-summary-display-article-function
                                    (quote ,(symbol-function 'nnhackernews--display-article)))
