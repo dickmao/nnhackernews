@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Keywords: news
 ;; URL: https://github.com/dickmao/nnhackernews
-;; Package-Requires: ((emacs "25.2") (request "20190819") (dash "20190401") (dash-functional "20180107") (anaphora "20180618"))
+;; Package-Requires: ((emacs "25.2") (request "20190819") (dash "2.18.0") (anaphora "20180618"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -50,7 +50,6 @@
 (require 'subr-x)
 (require 'request)
 (require 'dash)
-(require 'dash-functional)
 (require 'anaphora)
 (require 'url-http)
 
