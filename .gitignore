@@ -1,0 +1,10 @@
+scratch.el
+todo.org
+.cask
+dist
+test-install
+tests/.newsrc*
+tests/Mail
+tests/News
+tests/request
+.ecukes*
